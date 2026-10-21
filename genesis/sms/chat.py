@@ -158,15 +158,17 @@ def build_chat_router(settings: Settings, store: SmsStore, service: SmsService, 
         if job is not None:
             build = {"ref": job["ref"], "status": job["status"], "kind": job["kind"], "stage": None,
                      "progress": None, "label": None, "project": M.name_of(store.project(user["id"], job["project_id"]))}
-            if job["status"] == "running" and job["build_id"]:
-                try:
-                    b = builds.get(job["build_id"])
+            job_project = store.project(user["id"], job["project_id"]) or {}
+            website = job_project.get("kind") == "website"
+            if job["status"] == "running" and job["build_id"] and job["kind"] != "publish":
+                b = service.build_record(job["build_id"], "website" if website else "android")
+                if b is not None:
+                    table = M.WEB_PROGRESS if website else M.PROGRESS
                     build.update(stage=b.get("stage"), progress=b.get("progress"),
-                                 label=M.PROGRESS.get(b.get("stage", ""), (None, None, b.get("message")))[2])
-                except KeyError:
-                    pass
+                                 label=table.get(b.get("stage", ""), (None, None, b.get("message")))[2])
         projects = [{"number": p["number"], "name": M.name_of(p), "active": p["id"] == user["active_project_id"],
-                     "ready": bool(p["last_success_build_id"])} for p in store.projects(user["id"])]
+                     "ready": bool(p["last_success_build_id"]), "kind": p.get("kind") or "android",
+                     "published": bool(p.get("deploy_url"))} for p in store.projects(user["id"])]
         return {"messages": msgs, "build": build, "projects": projects}
 
     @r.post("/api/chat/messages")

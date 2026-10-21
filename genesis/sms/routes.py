@@ -23,12 +23,22 @@ from .voice import VoiceError, VoiceInbox, is_audio
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,64}$")
 MAX_DOWNLOADS_PER_LINK = 25
+MAX_PREVIEW_VIEWS_PER_LINK = 200
+PREVIEW_PAGE_RE = re.compile(r"^(?:index|option[23])\.html$")
+# Generated websites are untrusted. `sandbox` without allow-same-origin gives the page an opaque origin, so its
+# scripts can't read Genesis cookies or call Genesis APIs; the rest limits what it can load or send.
+PREVIEW_CSP = ("sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'none'; "
+               "script-src 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com "
+               "https://cdnjs.cloudflare.com; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net "
+               "https://cdnjs.cloudflare.com; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net "
+               "https://cdnjs.cloudflare.com; img-src https: data:; media-src https:; connect-src 'none'; "
+               "form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
 # Paths reachable from the internet (through the HTTPS tunnel/proxy) without the access code.
-PUBLIC_PREFIXES = ("/api/webhooks/twilio/", "/download/", "/chat", "/api/chat/")
+PUBLIC_PREFIXES = ("/api/webhooks/twilio/", "/download/", "/preview/", "/chat", "/api/chat/")
 
 
 def build_router(settings: Settings, store: SmsStore, service: SmsService, provider: SmsProvider,
-                 builds: JobStore, voice: VoiceInbox | None = None) -> APIRouter:
+                 builds: JobStore, voice: VoiceInbox | None = None, websites=None) -> APIRouter:
     r = APIRouter()
     voice = voice or VoiceInbox(settings)
 
@@ -142,6 +152,34 @@ def build_router(settings: Settings, store: SmsStore, service: SmsService, provi
         resp.headers["Cache-Control"] = "private, no-store"
         return resp
 
+    @r.get("/preview/{token}")
+    def preview_root(token: str):
+        return Response(status_code=308, headers={"Location": f"/preview/{token}/", "Cache-Control": "no-store"})
+
+    @r.get("/preview/{token}/")
+    @r.get("/preview/{token}/{page}")
+    def preview(token: str, page: str = "index.html"):
+        """A generated website, for whoever holds the link the owner of the project was sent."""
+        if not TOKEN_RE.fullmatch(token) or not PREVIEW_PAGE_RE.fullmatch(page) or websites is None:
+            raise HTTPException(404, "Not found")
+        state, row = store.use_download_token(token, MAX_PREVIEW_VIEWS_PER_LINK)
+        if state == "unknown":
+            event("web.preview_denied", logging.WARNING, reason="unknown")
+            raise HTTPException(404, "Not found")
+        if state != "ok":
+            return PlainTextResponse("This preview link has expired. Ask Genesis to \"send the link\" again.", status_code=410)
+        assert row is not None
+        if not websites.site_ok(row["build_id"]):  # also rejects APK tokens: they name an Android build
+            raise HTTPException(404, "Not found")
+        site_dir = websites.site_dir(row["build_id"]).resolve()
+        path = (site_dir / page).resolve()
+        if path.parent != site_dir or not path.is_file():
+            raise HTTPException(404, "Not found")
+        event("web.preview", build=row["build_id"], page=page)
+        return FileResponse(path, media_type="text/html; charset=utf-8", headers={
+            "Content-Security-Policy": PREVIEW_CSP, "Cache-Control": "private, no-store",
+            "X-Robots-Tag": "noindex, nofollow", "Cross-Origin-Opener-Policy": "same-origin"})
+
     # ---------- local-only admin (the guard marks loopback dashboard requests as local) ----------
     def require_local(request: Request) -> None:
         if not getattr(request.state, "local", False):
@@ -153,7 +191,9 @@ def build_router(settings: Settings, store: SmsStore, service: SmsService, provi
         return {"enabled": settings.sms_enabled, "provider": provider.name, "issues": settings.sms_issues(),
                 "signup": settings.sms_signup, "worker": settings.sms_worker,
                 "webhook_url": f"{settings.public_base_url}/api/webhooks/twilio/sms" if settings.public_base_url else None,
-                "owner_numbers": [mask(n) for n in service.owners], "stats": store.stats(), "events": counters()}
+                "owner_numbers": [mask(n) for n in service.owners], "stats": store.stats(), "events": counters(),
+                "website_builder": service.website_problem() or "available",
+                "website_publishing": service.publish_problem() or "netlify (owner approval per publish)"}
 
     @r.post("/api/sms/link-codes")
     def link_code(request: Request):

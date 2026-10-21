@@ -95,8 +95,10 @@ def node_runner(settings: Settings) -> Runner:
 class WebsiteBuilder:
     kind = "website"
 
-    def __init__(self, settings: Settings, runner: Runner | None = None, store: JobStore | None = None):
+    def __init__(self, settings: Settings, runner: Runner | None = None, store: JobStore | None = None,
+                 model_resolver: Callable[[], str] | None = None):
         self.s = settings
+        self.model_resolver = model_resolver
         self.runner = runner or node_runner(settings)
         self.store = store or JobStore(settings.sites_dir)
         self._slots = threading.BoundedSemaphore(1)
@@ -170,7 +172,12 @@ class WebsiteBuilder:
     def _model(self) -> str:
         if self.s.gemini_model and self.s.gemini_model != "auto":
             return self.s.gemini_model
-        return getattr(self, "resolved_model", "") or "gemini-flash-latest"
+        if self.model_resolver is not None:
+            try:
+                return self.model_resolver()
+            except Exception as e:  # noqa: BLE001 - the bridge reports the real API error
+                log.warning("could not resolve the Gemini model: %s", type(e).__name__)
+        return "gemini-flash-latest"
 
     def _run(self, job: dict, cancel: threading.Event) -> None:
         problem = self.problem()
@@ -260,3 +267,27 @@ class WebsiteBuilder:
     def _log(self, job: dict, line: str) -> None:
         with open(self.store.log_path(job["id"]), "a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%H:%M:%S')}] {line}\n")
+
+
+def probe(settings: Settings) -> tuple[bool, str]:
+    """Load the weave engine through the bridge without any AI call. Returns (ok, detail)."""
+    import tempfile
+
+    engine = Path(settings.website_engine_dir).expanduser()
+    with tempfile.TemporaryDirectory(prefix="genesis-web-probe-") as tmp:
+        sandbox = Path(tmp)
+        env = {"PATH": f"{Path(settings.node_bin).parent}:/usr/bin:/bin", "HOME": str(sandbox),
+               "TMPDIR": str(sandbox), "WEAVE_DATA_DIR": str(sandbox / "weave"), "AGY_BIN": "/nonexistent/agy"}
+        try:
+            result = node_runner(settings)({"op": "probe", "engine_dir": str(engine), "out_dir": str(sandbox)},
+                                           env, sandbox, 60, threading.Event(), sandbox / "probe.log")
+        except (BridgeError, OSError) as e:
+            return False, str(e)
+    if not result.get("ok"):
+        return False, str(result.get("error"))
+    try:
+        commit = subprocess.run(["git", "-C", str(engine), "rev-parse", "--short", "HEAD"], capture_output=True,
+                                text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = ""
+    return True, f"weave modules load (commit {commit or 'unknown'})"

@@ -47,6 +47,12 @@ def settings(tmp_path: Path) -> Settings:
     s.sms_signup = "link"
     s.sms_progress = "all"
     s.sms_progress_min_interval = 0
+    # Never use a website engine, Netlify token or Gemini model setting from .env in tests.
+    s.gemini_model = "auto"
+    s.website_engine_dir = ""
+    s.website_deploy = "off"
+    s.netlify_auth_token = ""
+    s.website_variants = 1
     return s
 
 

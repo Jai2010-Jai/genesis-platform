@@ -19,6 +19,57 @@ NEW_APP = re.compile(
     r"(?:a|an|another|one|me a|me an)\s+(?:[\w'-]+\s+){0,6}?(?:app|application|game|tracker|calculator)\b"
     r"|^(?:an?\s+)?(?:[\w'-]+\s+){0,4}?app\s+(?:that|which|to|for|where|with)\b", re.I)
 
+_SITE = r"(?:web\s*sites?|web\s*pages?|landing\s+pages?|home\s*pages?|portfolio(?:\s+site)?|site)"
+NEW_SITE = re.compile(
+    r"\b(?:build|create|make|generate|design|develop|start|code|write|launch|set\s+up)\s+(?:me\s+|us\s+|for\s+me\s+)?"
+    rf"(?:a|an|another|one)\s+(?:new\s+)?(?:[\w'-]+\s+){{0,6}}?{_SITE}\b"
+    r"|\b(?:i\s+(?:want|need|would like|'d like)|can you (?:make|build|create|design)|could you (?:make|build|create|design))\s+"
+    rf"(?:a|an|another|one|me a|me an)\s+(?:[\w'-]+\s+){{0,6}}?{_SITE}\b"
+    r"|\b(?:new|another|second|separate|different)\s+(?:web\s*site|site|landing\s+page)\b", re.I)
+# What kind of software a request is for. "app" on its own means an Android app (what Genesis always built).
+WEBSITE_WORDS = re.compile(r"\b(?:web\s*sites?|web\s*pages?|landing\s+pages?|home\s*pages?|portfolio\s+site|"
+                           r"site\s+for|online\s+presence|domain|seo)\b", re.I)
+ANDROID_WORDS = re.compile(r"\b(?:android|apk|play\s+store|(?:mobile|phone)\s+app|on\s+my\s+phone|install)\b", re.I)
+APP_NOUNS = re.compile(r"\b(?:apps?|application|tracker|calculator|planner|journal|timer|counter|game|organi[sz]er|"
+                       r"flashcards?|quiz|to-?do\s+list|notes?\s+app|diary|budget(?:ing)?\s+app)\b", re.I)
+WEB_APP = re.compile(r"\bweb\s*-?\s*apps?\b", re.I)
+
+
+def target_kind(text: str) -> str | None:
+    """'website', 'android', or None when the request doesn't say (then Genesis asks)."""
+    if WEB_APP.search(text):
+        return None  # could be either: a site, or an app; ask
+    web, android = bool(WEBSITE_WORDS.search(text) or re.search(rf"\b{_SITE}\b", text, re.I)), bool(ANDROID_WORDS.search(text))
+    if web and not android:
+        return "website"
+    if android and not web:
+        return "android"
+    if web and android:
+        return None
+    return "android" if APP_NOUNS.search(text) else None
+
+
+def answer_kind(text: str) -> str | None:
+    """Reply to "Android app or website?": 'android', 'website', 'no' or None."""
+    t = text.strip().lower()
+    if len(t.split()) > 8:
+        return None
+    if re.search(r"\b(?:web\s*site|site|web|page|landing|2)\b", t):
+        return "website"
+    if re.search(r"\b(?:app|android|apk|phone|mobile|1)\b", t):
+        return "android"
+    if NO.search(t):
+        return "no"
+    return None
+
+
+PUBLISH_REQ = re.compile(
+    r"^(?:please\s+|can\s+you\s+|could\s+you\s+)?(?:publish|deploy|go\s+live|put|make|launch|ship)\s*"
+    r"(?:it|this|that|the\s+(?:site|website|page)|my\s+(?:site|website|page))?\s*"
+    r"(?:live|online|on\s+the\s+(?:internet|web)|public(?:ly)?|to\s+netlify)?(?:\s+please)?[\s.!?]*$", re.I)
+STATUS_WHAT = re.compile(r"\bwhat\s+are\s+(?:you|u)\s+(?:building|working\s+on|making|doing)\b"
+                         r"|\bwhat(?:'s| is)\s+(?:being\s+)?(?:built|building)\b", re.I)
+
 CHANGE = re.compile(
     r"\b(?:add|remove|delete|change|make\s+(?:it|the|them|this|that|everything|all|each|my)|put|rename|fix|"
     r"replace|increase|decrease|bigger|smaller|larger|darker|lighter|brighter|move|swap|switch\s+(?:the|it)|"
@@ -68,7 +119,7 @@ NO = _rx(r"^(?:no|nope|nah|cancel|never\s*mind|nvm)\b")
 
 @dataclass
 class Intent:
-    kind: str  # greeting|thanks|help|status|projects|download|cancel|retry|switch|new|change|ambiguous|unclear
+    kind: str  # greeting|thanks|help|status|projects|download|cancel|retry|switch|publish|new|change|ambiguous|unclear
     arg: str = ""
 
 
@@ -77,6 +128,10 @@ def classify(text: str, *, has_projects: bool, has_active: bool, project_names: 
     low = t.lower()
     if not t:
         return Intent("unclear")
+    if STATUS_WHAT.search(t):
+        return Intent("status")
+    if PUBLISH_REQ.match(t) and re.search(r"\b(?:publish|deploy|live|online|public|netlify)", t, re.I):
+        return Intent("publish")
     for kind, rx in (("greeting", GREETING), ("thanks", THANKS), ("help", HELP), ("cancel", CANCEL),
                      ("retry", RETRY), ("download", DOWNLOAD), ("projects", PROJECTS), ("status", STATUS)):
         if rx.search(t):
@@ -86,7 +141,7 @@ def classify(text: str, *, has_projects: bool, has_active: bool, project_names: 
         number = _project_number(target, project_names or {})
         if number is not None:
             return Intent("switch", str(number))
-    if NEW_APP.search(t):
+    if NEW_APP.search(t) or NEW_SITE.search(t):
         return Intent("new", t)
     if QUESTION.search(t) and not (has_active and CHANGE.search(t) and REQUEST.search(t)):
         return Intent("question", t)

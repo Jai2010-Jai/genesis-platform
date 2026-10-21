@@ -47,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
             except GeminiError as e:
                 print(f"MISSING  Gemini: {e}")
                 return 1
+        from .web.builder import probe
+
+        for c in settings.website_doctor():
+            print(f"{'OK ' if c['ok'] else 'MISSING'}  {c['name']}: {c['detail']}")
+        if not settings.website_problem():
+            ok, detail = probe(settings)
+            print(f"{'OK ' if ok else 'FAILED '}  Website engine load: {detail}")
         return 0 if report["ready"] else 1
 
     if args.cmd == "antigravity-check":

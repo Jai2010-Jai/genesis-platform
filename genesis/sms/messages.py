@@ -25,6 +25,11 @@ PROGRESS = {
     "repairing": ("repairing", True, "Found a build error. Fixing it automatically."),
     "verifying": ("verifying", False, "Testing the finished app package."),
 }
+WEB_PROGRESS = {
+    "generating": ("generating", True, "Researching a design direction and writing your website."),
+    "validating": ("validating", False, "Checking the generated website for safety."),
+    "verifying": ("verifying", False, "Preparing your private preview link."),
+}
 
 
 def ascii_safe(text: str) -> str:
@@ -75,6 +80,16 @@ def failure_reason(error: str | None) -> str:
         return "The app package failed verification."
     if "interrupted" in e:
         return "The Genesis server restarted during the build."
+    if "website builder unavailable" in e:
+        return "Website building isn't set up on the Genesis server."
+    if "did not apply the change" in e:
+        return "The AI didn't apply the change to the website."
+    if "website generation failed" in e or "did not produce the website" in e:
+        return "The AI couldn't generate the website."
+    if "website generation timed out" in e:
+        return "Generating the website took too long and was stopped."
+    if "netlify" in e:
+        return "Netlify didn't accept the publish."
     if "sources of the previous build" in e:
         return "The previous version's code is no longer available."
     return "The build failed."

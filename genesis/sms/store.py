@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     ref TEXT NOT NULL UNIQUE,                -- G-XXXXX, shown to the user
     user_id INTEGER NOT NULL REFERENCES users(id),
     project_id INTEGER NOT NULL REFERENCES projects(id),
-    kind TEXT NOT NULL,                      -- new | change
+    kind TEXT NOT NULL,                      -- new | change | publish (websites, owner-approved)
     prompt TEXT NOT NULL,
     change_request TEXT,
     base_build_id TEXT,
@@ -144,8 +144,18 @@ class SmsStore:
             c.execute("ALTER TABLE users ADD COLUMN reply_from TEXT")
         if "pending_text" not in cols:  # a message waiting for "new app or change?" to be answered
             c.execute("ALTER TABLE users ADD COLUMN pending_text TEXT")
+        if "pending_question" not in cols:  # what pending_text is waiting on: NULL (new or change?) | kind | publish
+            c.execute("ALTER TABLE users ADD COLUMN pending_question TEXT")
         if "sender" not in {r["name"] for r in c.execute("PRAGMA table_info(messages)").fetchall()}:
             c.execute("ALTER TABLE messages ADD COLUMN sender TEXT")
+        # Unified projects (Android apps and websites). Additive only: older Genesis versions ignore these columns.
+        pcols = {r["name"] for r in c.execute("PRAGMA table_info(projects)").fetchall()}
+        if "kind" not in pcols:  # android | website
+            c.execute("ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'android'")
+        if "deploy_url" not in pcols:  # public URL of the last approved publish (websites only)
+            c.execute("ALTER TABLE projects ADD COLUMN deploy_url TEXT")
+        if "deploy_site_id" not in pcols:
+            c.execute("ALTER TABLE projects ADD COLUMN deploy_site_id TEXT")
 
     # ---------- connection ----------
     def _conn(self) -> sqlite3.Connection:
@@ -232,12 +242,14 @@ class SmsStore:
         return dict(user)
 
     # ---------- projects ----------
-    def create_project(self, user_id: int, prompt: str) -> dict:
+    def create_project(self, user_id: int, prompt: str, kind: str = "android") -> dict:
+        if kind not in ("android", "website"):
+            raise ValueError(f"unknown project kind: {kind}")
         now = time.time()
         with self.tx() as c:
             n = c.execute("SELECT COALESCE(MAX(number), 0) + 1 FROM projects WHERE user_id = ?", (user_id,)).fetchone()[0]
-            cur = c.execute("INSERT INTO projects (user_id, number, original_prompt, created_at, updated_at) "
-                            "VALUES (?, ?, ?, ?, ?)", (user_id, n, prompt, now, now))
+            cur = c.execute("INSERT INTO projects (user_id, number, kind, original_prompt, created_at, updated_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?)", (user_id, n, kind, prompt, now, now))
             c.execute("UPDATE users SET active_project_id = ?, awaiting_new = 0 WHERE id = ?", (cur.lastrowid, user_id))
         return self.project(user_id, cur.lastrowid)  # type: ignore[return-value]
 

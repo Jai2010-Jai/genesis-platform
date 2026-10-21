@@ -64,7 +64,8 @@ def _hostname(netloc: str | None) -> str:
 
 
 def create_app(settings: Settings | None = None, orchestrator: Orchestrator | None = None,
-               sms_provider=None, start_sms_worker: bool | None = None) -> FastAPI:
+               sms_provider=None, start_sms_worker: bool | None = None, website_builder=None,
+               publisher=None) -> FastAPI:
     s = settings or default_settings
     gemini = make_ai_client(s)
     orch = orchestrator or Orchestrator(s, gemini)
@@ -80,13 +81,18 @@ def create_app(settings: Settings | None = None, orchestrator: Orchestrator | No
 
         sms_store = SmsStore(s.sms_db_path)
         provider = ChannelRouter(sms_provider or make_provider(s))
+        from .web.builder import WebsiteBuilder
+
         sms_service = SmsService(s, sms_store, orch.store)
-        sms = SmsWorker(s, sms_store, orch, provider, sms_service)
+        # Unavailable (with a reason) until configured. Uses the same Gemini model Genesis auto-selects.
+        sms_service.web = website_builder or WebsiteBuilder(
+            s, model_resolver=orch.gen.model_name if s.ai_backend == "api" and hasattr(orch.gen, "model_name") else None)
+        sms = SmsWorker(s, sms_store, orch, provider, sms_service, publisher=publisher)
         from .sms.voice import VoiceInbox
         sms.voice = VoiceInbox(s)  # tests swap in a fake fetch/transcribe
         if s.chat_brain and hasattr(orch.gen, "ask"):
             from .sms.brain import ChatBrain
-            sms_service.brain = ChatBrain(s, orch.gen)
+            sms_service.brain = ChatBrain(s, orch.gen, website_problem=sms_service.website_problem)
         public_prefixes: tuple[str, ...] = PUBLIC_PREFIXES
     else:
         public_prefixes = ()
@@ -272,7 +278,8 @@ def create_app(settings: Settings | None = None, orchestrator: Orchestrator | No
     if sms is not None:
         from .sms.chat import build_chat_router
 
-        app.include_router(build_router(s, sms.store, sms.service, sms.provider, orch.store, sms.voice))
+        app.include_router(build_router(s, sms.store, sms.service, sms.provider, orch.store, sms.voice,
+                                        websites=sms.service.web))
         app.include_router(build_chat_router(s, sms.store, sms.service, orch.store))
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

@@ -17,7 +17,7 @@ from ..core.jobs import JobStore
 from . import messages as M
 from .observe import event
 from .phone import mask, normalize_e164
-from .intent import answer_reply, classify, substance
+from .intent import answer_kind, answer_reply, classify, substance, target_kind
 from .store import SmsStore
 
 MIN_PROMPT, MAX_PROMPT = 10, 4000
@@ -36,6 +36,7 @@ NEW_INTENT = re.compile(
     r"organi[sz]er|flashcards?|quiz|to-?do list)\b"
     r"|\b(?:new|another|second|separate|different)\s+app\b", re.I)
 REF_RE = re.compile(r"^G-[2-9A-HJ-NP-TV-Z]{5}$", re.I)
+NEVER_BUILDS = {"greeting", "thanks", "help", "status", "projects", "download", "cancel", "publish"}
 
 
 @dataclass
@@ -56,6 +57,7 @@ class SmsService:
         self.builds = builds
         self._req = threading.local()  # per-request: our number the inbound message was sent to
         self.brain = None  # ChatBrain when plain-language chat runs through the AI backend
+        self.web = None  # genesis.web.builder.WebsiteBuilder; None = no website builder in this process
         self.owners = {n for n in (normalize_e164(x, settings.sms_default_country_code) for x in settings.sms_owner_numbers) if n}
 
     # ---------- entry point ----------
@@ -167,6 +169,17 @@ class SmsService:
 
     # ---------- commands and plain English ----------
     def _dispatch(self, user: dict, word: str, rest: str, body: str, sid: str) -> str:
+        question = user.get("pending_question")
+        if question == "publish" and user.get("pending_text"):
+            handled = self._resolve_publish(user, body, sid)
+            if handled is not None:
+                return handled
+            user = self.store.user_by_id(user["id"])
+        elif question == "kind" and user.get("pending_text"):
+            handled = self._resolve_kind(user, body, sid)
+            if handled is not None:
+                return handled
+            user = self.store.user_by_id(user["id"])
         if user.get("pending_text") and answer_reply(body) is not None:
             # "new" / "change" / "no" answers the question we just asked; it is not the NEW command.
             return self._resolve_pending(user, body, sid)
@@ -208,7 +221,12 @@ class SmsService:
             return "brain_error"
 
     def _chat_context(self, user: dict, body: str) -> str:
-        lines = [f"Channel: {user['channel']}", "", "Their apps:"]
+        problem = self.website_problem()
+        lines = [f"Channel: {user['channel']}",
+                 "Website builder: " + ("available" if not problem else f"NOT available ({problem})"),
+                 "Publishing websites: " + ("available (owner must confirm)" if not self.publish_problem() and
+                                            user["role"] == "owner" else "not available"),
+                 "", "Their projects:"]
         projects = self.store.projects(user["id"], limit=10)
         for p in projects:
             last = self.store.latest_job(user["id"], p["id"])
@@ -216,7 +234,10 @@ class SmsService:
             if p["last_success_build_id"] and state != "succeeded":
                 state += " (an earlier version is ready)"
             active = " [ACTIVE]" if p["id"] == user["active_project_id"] else ""
-            lines.append(f"{p['number']}. {M.name_of(p)}{active} - {state}. Idea: {p['original_prompt'][:200]}")
+            kind = "website" if p.get("kind") == "website" else "Android app"
+            if p.get("deploy_url"):
+                state += ", published"
+            lines.append(f"{p['number']}. {M.name_of(p)} ({kind}){active} - {state}. Idea: {p['original_prompt'][:200]}")
         if not projects:
             lines.append("(none yet)")
         job = self.store.active_job(user["id"])
@@ -238,9 +259,21 @@ class SmsService:
         project = None
         if d.project is not None:
             project = self.store.project_by_number(user["id"], d.project)
-        if d.action == "new_app":
+        if d.action in ("new_app", "new_website", "change_app"):
+            # Deterministic guard: greetings, thanks and status/list/link questions never start or change a build,
+            # whatever the model decided.
+            rule = classify(body, has_projects=True, has_active=True).kind
+            if rule in NEVER_BUILDS:
+                event("sms.brain_overruled", action=d.action, rule=rule)
+                return self._plain(user, body, sid)
+        if d.action in ("new_app", "new_website"):
             spec = (d.spec or "").strip() or body
-            return self._start_new(user, spec, sid, lead=reply)
+            kind = "website" if d.action == "new_website" else "android"
+            said = target_kind(body) or target_kind(spec)
+            if said is not None and said != kind:
+                # The model and the user's own words disagree: ask (or follow their words if there's no choice).
+                kind = None if self.websites_available() else said
+            return self._start_new(user, spec, sid, lead=reply if kind else "", kind=kind)
         if d.action == "change_app":
             project = project or self._active_project(user)
             if project is None:
@@ -258,6 +291,8 @@ class SmsService:
             return self._cancel(user)
         if d.action == "retry":
             return self._retry(user, sid)
+        if d.action == "publish":
+            return self._publish_request(user, project)  # only asks; the owner must reply PUBLISH
         self._reply(user["phone"], user, reply or "Sorry, I didn't catch that. What would you like to build?")
         return "chat"
 
@@ -265,7 +300,7 @@ class SmsService:
         """Exact commands (HELP, STATUS, USE 2, ...). Returns None for anything that reads like normal speech."""
         number = rest.strip().lstrip("#")
         if word in ("HELP", "INFO", "COMMANDS", "?", "MENU") and not rest:
-            self._reply(user["phone"], user, M.HELP)
+            self._reply(user["phone"], user, self._help())
             return "help"
         if word == "NEW":
             if len(rest) >= MIN_PROMPT:
@@ -295,6 +330,9 @@ class SmsService:
             return self._cancel(user)
         if word == "RETRY" and not rest:
             return self._retry(user, sid)
+        if word in ("PUBLISH", "DEPLOY") and (not rest or number.isdigit()):
+            project = self.store.project_by_number(user["id"], int(number)) if number.isdigit() else None
+            return self._publish_request(user, project)
         return None
 
     def _plain(self, user: dict, body: str, sid: str) -> str:
@@ -310,6 +348,9 @@ class SmsService:
             if project is not None:
                 text = (f"Hey! We're working on {M.name_of(project)}. Tell me what to change "
                         "(like \"make the buttons bigger\"), or describe a new app.")
+            elif self.websites_available():
+                text = ("Hey! I'm Genesis. Describe an Android app or a website and I'll build it, like \"a habit "
+                        "tracker with streaks\" or \"a website for my bakery\". You can also send a voice note.")
             else:
                 text = ("Hey! I'm Genesis. Describe an app and I'll build it for your Android phone, "
                         "like \"a habit tracker with streaks and a dark theme\". You can also send a voice note.")
@@ -322,8 +363,10 @@ class SmsService:
             self._reply(user["phone"], user, text)
             return "thanks"
         if kind == "help":
-            self._reply(user["phone"], user, M.HELP)
+            self._reply(user["phone"], user, self._help())
             return "help"
+        if kind == "publish":
+            return self._publish_request(user, None)
         if kind == "status":
             return self._status(user, "")
         if kind == "projects":
@@ -343,13 +386,17 @@ class SmsService:
                 return "awaiting_new"
             return self._start_new(user, intent.arg, sid)
         if kind == "question":
-            self._reply(user["phone"], user, "I build Android apps from a description (not websites or iPhone apps). "
-                                             "Tell me what you'd like the app to do and I'll build it.")
+            if self.websites_available():
+                self._reply(user["phone"], user, "I build Android apps and simple websites from a description (not iPhone "
+                                                 "apps). Tell me what you'd like and I'll build it.")
+            else:
+                self._reply(user["phone"], user, "I build Android apps from a description (not websites or iPhone apps). "
+                                                 "Tell me what you'd like the app to do and I'll build it.")
             return "question"
         if kind == "change" and project is not None:
             return self._start_change(user, project, intent.arg, sid)
         if kind == "ambiguous" and project is not None:
-            self.store.update_user(user["id"], pending_text=body[:MAX_PROMPT])
+            self.store.update_user(user["id"], pending_text=body[:MAX_PROMPT], pending_question=None)
             self._reply(user["phone"], user, f"Should I change {M.name_of(project)} with that, or make it a new app? "
                                              "Reply \"change\" or \"new\".")
             return "ask_new_or_change"
@@ -390,25 +437,119 @@ class SmsService:
         self._reply(user["phone"], user, "\n".join(lines))
         return "clarify"
 
-    def _start_new(self, user: dict, idea: str, sid: str, lead: str = "") -> str:
+    def _start_new(self, user: dict, idea: str, sid: str, lead: str = "", kind: str | None = None) -> str:
         if len(idea) < MIN_PROMPT:
             self._reply(user["phone"], user, "Tell me a bit more about the app (at least 10 characters).")
             return "too_short"
         if len(idea) > MAX_PROMPT:
             idea = idea[:MAX_PROMPT]
+        if kind is None:
+            kind = target_kind(idea)
+            if kind is None:
+                if not self.websites_available():
+                    kind = "android"  # the only builder here: nothing to choose between
+                else:
+                    self.store.update_user(user["id"], pending_text=idea, pending_question="kind")
+                    self._reply(user["phone"], user, "Should I build that as an Android app (an APK for your phone) "
+                                                     "or as a website? Reply \"app\" or \"website\".")
+                    return "ask_kind"
+        if kind == "website" and (problem := self.website_problem()):
+            event("sms.website_unavailable", phone=mask(user["phone"]))
+            self._reply(user["phone"], user, f"Sorry, I can't build websites on this Genesis server right now ({problem}). "
+                                             "I can build it as an Android app instead: say \"build it as an app\".")
+            return "website_unavailable"
         if (blocked := self._gate(user)) is not None:
             return blocked
-        project = self.store.create_project(user["id"], idea)
+        project = self.store.create_project(user["id"], idea, kind)
         job = self.store.enqueue_job(user_id=user["id"], project_id=project["id"], kind="new", prompt=idea,
                                      change_request=None, base_build_id=None,
                                      max_attempts=self.s.sms_job_max_attempts, inbound_sid=sid)
-        event("sms.job_enqueued", ref=job["ref"], kind="new", phone=mask(user["phone"]))
-        self._reply(user["phone"], user, (f"{lead} " if lead else "Got it! I'm turning your idea into an app. ") +
-                                         f"Build ID: {job['ref']}. "
-                                         "I'll message you when it's ready (usually 2-6 min). "
-                                         "Ask \"how's it going?\" anytime.",
-                    job_id=job["id"])
+        event("sms.job_enqueued", ref=job["ref"], kind="new", project_kind=kind, phone=mask(user["phone"]))
+        if kind == "website":
+            text = ((f"{lead} " if lead else "Got it! I'm designing your website. ") + f"Build ID: {job['ref']}. "
+                    "I'll send a private preview link when it's ready (usually a few minutes). "
+                    "Ask \"how's it going?\" anytime.")
+        else:
+            text = ((f"{lead} " if lead else "Got it! I'm turning your idea into an app. ") + f"Build ID: {job['ref']}. "
+                    "I'll message you when it's ready (usually 2-6 min). Ask \"how's it going?\" anytime.")
+        self._reply(user["phone"], user, text, job_id=job["id"])
         return "queued_new"
+
+    def _resolve_kind(self, user: dict, body: str, sid: str) -> str | None:
+        """Answer to "Android app or website?". None = they said something else (handled as a new message)."""
+        pending = user["pending_text"]
+        answer = answer_kind(body)
+        self.store.update_user(user["id"], pending_text=None, pending_question=None)
+        if answer in ("android", "website"):
+            return self._start_new(user, pending, sid, kind=answer)
+        if answer == "no":
+            self._reply(user["phone"], user, "Okay, I won't build that.")
+            return "pending_dropped"
+        return None
+
+    # ---------- publishing (websites only, owner approval every time) ----------
+    def publish_problem(self) -> str:
+        if self.s.website_deploy != "netlify":
+            return "publishing is switched off on this Genesis server"
+        if not self.s.netlify_auth_token:
+            return "publishing is not configured (no Netlify token)"
+        return ""
+
+    def _publish_request(self, user: dict, project: dict | None) -> str:
+        """Explain what publishing does and ask for an explicit PUBLISH. Never publishes by itself."""
+        project = project or self._active_project(user)
+        if project is None or project.get("kind") != "website":
+            websites = [p for p in self.store.projects(user["id"], limit=20) if p.get("kind") == "website"]
+            if project is None and len(websites) == 1:
+                project = websites[0]
+            else:
+                self._reply(user["phone"], user, "Only websites can be published. Switch to the website first "
+                                                 "(\"show my projects\", then \"switch to <n>\").")
+                return "publish_not_website"
+        if user["role"] != "owner":
+            self._reply(user["phone"], user, "Only the Genesis owner can publish websites. Your private preview link "
+                                             "still works: say \"send the link\".")
+            return "publish_forbidden"
+        if (problem := self.publish_problem()):
+            self._reply(user["phone"], user, f"I can't publish: {problem}. Your website stays a private preview "
+                                             "(say \"send the link\").")
+            return "publish_unavailable"
+        build_id = project["last_success_build_id"]
+        if not build_id or not self._build_ok(build_id, "website"):
+            self._reply(user["phone"], user, f"{M.name_of(project)} has no finished version to publish yet.")
+            return "publish_none"
+        self.store.update_user(user["id"], pending_text=str(project["id"]), pending_question="publish")
+        where = f"update the public site at {project['deploy_url']}" if project.get("deploy_url") else \
+            "put it on the public internet with Netlify"
+        self._reply(user["phone"], user, f"Publishing {M.name_of(project)} will {where}. Anyone with the address can "
+                                         "see it. Reply PUBLISH to confirm, or anything else to cancel.")
+        event("sms.publish_requested", phone=mask(user["phone"]))
+        return "publish_confirm"
+
+    def _resolve_publish(self, user: dict, body: str, sid: str) -> str | None:
+        project = self.store.project(user["id"], int(user["pending_text"])) if user["pending_text"].isdigit() else None
+        self.store.update_user(user["id"], pending_text=None, pending_question=None)
+        if body.strip().upper().rstrip(".!") != "PUBLISH":
+            if answer_reply(body) == "no" or len(body.split()) <= 2:
+                self._reply(user["phone"], user, "Okay, not publishing. Your preview is unchanged.")
+                return "publish_declined"
+            return None  # something else entirely: handle it as a normal message
+        if project is None or user["role"] != "owner" or self.publish_problem():
+            self._reply(user["phone"], user, "I can't publish that now.")
+            return "publish_unavailable"
+        build_id = project["last_success_build_id"]
+        if not build_id or not self._build_ok(build_id, "website"):
+            self._reply(user["phone"], user, f"{M.name_of(project)} has no finished version to publish.")
+            return "publish_none"
+        if (blocked := self._gate(user)) is not None:
+            return blocked
+        job = self.store.enqueue_job(user_id=user["id"], project_id=project["id"], kind="publish",
+                                     prompt=project["original_prompt"], change_request=None, base_build_id=build_id,
+                                     max_attempts=1, inbound_sid=sid)
+        event("sms.publish_approved", ref=job["ref"], phone=mask(user["phone"]))
+        self._reply(user["phone"], user, f"Publishing {M.name_of(project)} now. Build ID: {job['ref']}. "
+                                         "I'll send the public address when Netlify confirms it.", job_id=job["id"])
+        return "queued_publish"
 
     def _start_change(self, user: dict, project: dict, change: str, sid: str, lead: str = "") -> str:
         if (blocked := self._gate(user)) is not None:
@@ -418,8 +559,11 @@ class SmsService:
         if spec is None:
             self._reply(user["phone"], user, "That project has too many changes to track by SMS. Text NEW <idea> to start fresh.")
             return "too_long"
+        if project.get("kind") == "website" and (problem := self.website_problem()):
+            self._reply(user["phone"], user, f"Sorry, I can't change websites on this Genesis server right now ({problem}).")
+            return "website_unavailable"
         base = project["last_success_build_id"]
-        if base and not self._build_ok(base):
+        if base and not self._build_ok(base, project.get("kind", "android")):
             base = None
         # With a working previous version, Gemini edits its sources; otherwise rebuild from the full spec.
         job = self.store.enqueue_job(user_id=user["id"], project_id=project["id"], kind="change" if base else "new",
@@ -463,6 +607,15 @@ class SmsService:
             return "status_none"
         project = self.store.project(user["id"], job["project_id"])
         name, ref = M.name_of(project), job["ref"]
+        website = bool(project and project.get("kind") == "website")
+        if job["kind"] == "publish":
+            text = {"queued": f"{ref}: publishing {name} is waiting to start.",
+                    "running": f"{ref}: publishing {name} to Netlify now.",
+                    "succeeded": f"{ref}: {name} is published at {project.get('deploy_url') if project else ''}",
+                    "cancelled": f"{ref}: publishing {name} was cancelled."}.get(
+                        job["status"], f"{ref}: publishing {name} failed. {M.failure_reason(job['error'])}")
+            self._reply(user["phone"], user, text)
+            return "status"
         if job["status"] == "queued":
             text = f"{ref} ({name}) is waiting for a build slot."
             if job["attempts"]:
@@ -470,16 +623,16 @@ class SmsService:
         elif job["status"] == "running":
             text = f"{ref} ({name}) is running."
             if job["build_id"]:
-                try:
-                    b = self.builds.get(job["build_id"])
-                    stage = M.PROGRESS.get(b.get("stage", ""), (None, None, b.get("message") or ""))[2]
-                    text = f"{ref} ({name}): {stage} ({b.get('progress', 0)}%)"
-                except KeyError:
-                    pass
+                b = self.build_record(job["build_id"], "website" if website else "android")
+                if b is not None:
+                    table = M.WEB_PROGRESS if website else M.PROGRESS
+                    stage = table.get(b.get("stage", ""), (None, None, b.get("message") or ""))[2]
+                    text = f"{ref} ({name}): {stage}"
             if job["cancel_requested"]:
                 text += " Stopping it now."
         elif job["status"] == "succeeded":
-            text = f"{ref} ({name}) is ready. Reply OPEN for the download link."
+            text = f"{ref} ({name}) is ready. " + ("Say \"send the link\" for the preview." if website else
+                                                    "Reply OPEN for the download link.")
         elif job["status"] == "cancelled":
             text = f"{ref} ({name}) was cancelled. Reply RETRY to build it again."
         else:
@@ -495,12 +648,19 @@ class SmsService:
         lines = []
         for p in projects:
             last = self.store.latest_job(user["id"], p["id"])
+            if last and last["kind"] == "publish":
+                last = self.store.one("SELECT * FROM jobs WHERE user_id = ? AND project_id = ? AND kind != 'publish' "
+                                      "ORDER BY id DESC LIMIT 1", (user["id"], p["id"]))
             state = {"succeeded": "ready", "running": "building", "queued": "queued"}.get(last["status"] if last else "", "failed" if last else "-")
             if p["last_success_build_id"] and state == "failed":
                 state = "ready (last change failed)"
+            if p.get("deploy_url"):
+                state += ", published"
             star = " *" if p["id"] == user["active_project_id"] else ""
-            lines.append(f"{p['number']} {M.name_of(p)} - {state}{star}")
-        self._reply(user["phone"], user, "Your apps (* = active):\n" + "\n".join(lines) + "\nReply USE <n> to switch.")
+            label = " (website)" if p.get("kind") == "website" else ""
+            lines.append(f"{p['number']} {M.name_of(p)}{label} - {state}{star}")
+        title = "Your projects" if any(p.get("kind") == "website" for p in projects) else "Your apps"
+        self._reply(user["phone"], user, f"{title} (* = active):\n" + "\n".join(lines) + "\nReply USE <n> to switch.")
         return "projects"
 
     def _use(self, user: dict, rest: str) -> str:
@@ -518,9 +678,20 @@ class SmsService:
         if project is None:
             return self._clarify(user, "Which app?")
         build_id = project["last_success_build_id"]
-        if not build_id or not self._build_ok(build_id):
+        kind = project.get("kind", "android")
+        if not build_id or not self._build_ok(build_id, kind):
             self._reply(user["phone"], user, f"{M.name_of(project)} has no finished build yet. Reply STATUS for progress.")
             return "open_none"
+        if kind == "website":
+            url = self.preview_url(user["id"], build_id, relative_ok=user["channel"] == "web")
+            lines = [f"{M.name_of(project)} (website)"]
+            if url:
+                lines.append(f"Private preview (only people with this link, expires in {self.s.sms_link_ttl_hours}h): {url}")
+            else:
+                lines.append("Preview links aren't configured on the Genesis server (PUBLIC_BASE_URL).")
+            lines.append(f"Published at: {project['deploy_url']}" if project.get("deploy_url") else "Not published.")
+            self._reply(user["phone"], user, "\n".join(lines))
+            return "open"
         url = self.download_url(user["id"], build_id, relative_ok=user["channel"] == "web")
         if url is None:
             self._reply(user["phone"], user, "Download links aren't configured on the Genesis server (PUBLIC_BASE_URL).")
@@ -548,12 +719,19 @@ class SmsService:
         if last is None:
             self._reply(user["phone"], user, "Nothing to retry. Text an app idea to start.")
             return "retry_none"
+        if last["kind"] == "publish":
+            self._reply(user["phone"], user, "To try publishing again, say \"publish it\" (you'll be asked to confirm).")
+            return "retry_publish"
         if last["status"] not in ("failed", "cancelled"):
             self._reply(user["phone"], user, f"Build {last['ref']} is {last['status']}; nothing to retry.")
             return "retry_none"
         if (blocked := self._gate(user)) is not None:
             return blocked
-        base = last["base_build_id"] if last["base_build_id"] and self._build_ok(last["base_build_id"]) else None
+        kind = project.get("kind", "android")
+        if kind == "website" and (problem := self.website_problem()):
+            self._reply(user["phone"], user, f"Sorry, I can't build websites on this Genesis server right now ({problem}).")
+            return "website_unavailable"
+        base = last["base_build_id"] if last["base_build_id"] and self._build_ok(last["base_build_id"], kind) else None
         job = self.store.enqueue_job(user_id=user["id"], project_id=project["id"], kind="change" if base else "new",
                                      prompt=last["prompt"], change_request=last["change_request"] if base else None,
                                      base_build_id=base, max_attempts=self.s.sms_job_max_attempts, inbound_sid=sid)
@@ -572,12 +750,43 @@ class SmsService:
     def _active_project(self, user: dict) -> dict | None:
         return self.store.project(user["id"], user["active_project_id"])
 
-    def _build_ok(self, build_id: str) -> bool:
+    def _build_ok(self, build_id: str, kind: str = "android") -> bool:
+        if kind == "website":
+            return self.web is not None and self.web.site_ok(build_id)
         try:
             b = self.builds.get(build_id)
         except KeyError:
             return False
         return b.get("status") == "succeeded" and bool(b.get("apk"))
+
+    def build_record(self, build_id: str, kind: str = "android") -> dict | None:
+        store = self.web.store if kind == "website" and self.web is not None else self.builds
+        try:
+            return store.get(build_id)
+        except KeyError:
+            return None
+
+    def website_problem(self) -> str:
+        if self.web is None:
+            return "the website builder isn't set up"
+        return self.web.problem()
+
+    def websites_available(self) -> bool:
+        return not self.website_problem()
+
+    def _help(self) -> str:
+        if not self.websites_available():
+            return M.HELP
+        return M.HELP.replace("- Describe an app to build it\n",
+                              "- Describe an app or a website to build it\n") + "\nWebsites: \"publish it\" puts one online (owner only)."
+
+    def preview_url(self, user_id: int, build_id: str, relative_ok: bool = False) -> str | None:
+        """An expiring private link to a generated website (served sandboxed by /preview/<token>/)."""
+        base = self.s.public_base_url if self.s.public_base_url.startswith(("https://", "http://")) else None
+        if base is None and not relative_ok:
+            return None
+        token = self.store.create_download_token(user_id, build_id, self.s.sms_link_ttl_hours * 3600)
+        return f"{base or ''}/preview/{token}/"
 
     def download_url(self, user_id: int, build_id: str, relative_ok: bool = False) -> str | None:
         """An expiring link to the build's APK. The web chat can use a same-origin relative link."""

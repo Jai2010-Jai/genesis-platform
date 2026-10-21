@@ -19,9 +19,13 @@ def _components(provider=None):
     from .store import SmsStore
     from .worker import SmsWorker
 
-    orch = Orchestrator(settings, make_ai_client(settings))
+    from ..web.builder import WebsiteBuilder
+
+    ai = make_ai_client(settings)
+    orch = Orchestrator(settings, ai)
     store = SmsStore(settings.sms_db_path)
     service = SmsService(settings, store, orch.store)
+    service.web = WebsiteBuilder(settings, model_resolver=ai.model_name if settings.ai_backend == "api" else None)
     worker = SmsWorker(settings, store, orch, provider or make_provider(settings), service)
     return store, service, worker
 
