@@ -272,6 +272,8 @@ class SmsWorker:
         job = self.store.job(job_id)
         if job is None or job["cancel_requested"]:
             return
+        if build.get("kind") == "website" and build.get("base_job_id") and ev == "generating":
+            text = "Applying your change to the website."
         if ev == "building" and build.get("attempts"):
             key = f"building-{len(build['attempts']) + 1}"
             text = f"Rebuilding with the fix (attempt {len(build['attempts']) + 1})."

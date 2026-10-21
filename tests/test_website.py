@@ -181,9 +181,11 @@ def test_validate_rejects(html):
 FAKE_GEMINI = """
 export class GeminiClient {
   constructor() { this.apiKey = process.env.GEMINI_API_KEY || ''; this.model = process.env.GEMINI_MODEL; }
-  async generateContent(prompt, system) {
+  async generateContent(prompt, system, config) {
     const mode = process.env.FAKE_MODE;
     if (mode === 'down') throw new Error('Gemini API error (503): overloaded key=AIzaSyFAKEFAKEFAKEFAKEFAKEFAKE');
+    if (system.includes('Design Director') && mode === 'badjson') return { text: '{"topicAnalysis": {"brandName": "X",}', raw: {} };
+    if (system.includes('Design Director') && config?.responseMimeType !== 'application/json') return { text: 'not json', raw: {} };
     if (system.includes('Design Director')) return { text: JSON.stringify({ topicAnalysis: { brandName: 'Brew Haven' },
       inspirations: [{ name: 'Roast', sourceInspiration: 'Cafe' }, { name: 'B' }, { name: 'C' }] }), raw: {} };
     if (mode === 'nohtml') return { text: 'Sorry, I cannot.', raw: {} };
@@ -275,6 +277,15 @@ def test_bridge_reports_canned_fallback_as_failure_and_redacts(settings, tmp_pat
 
 
 @needs_node
+def test_bridge_detects_research_fallback_after_a_successful_call(settings, tmp_path, fake_engine):
+    result, out = run_bridge(settings, tmp_path, {"op": "generate", "engine_dir": str(fake_engine), "prompt": "coffee"},
+                             mode="badjson")
+    assert result["ok"] is True  # the page itself still came from the model
+    assert result["research"] == "fallback" and result["calls"][0]["ok"] is True
+    assert (out / "index.html").read_text().startswith("<!DOCTYPE html>")
+
+
+@needs_node
 def test_bridge_never_uses_agy_without_a_key(settings, tmp_path, fake_engine):
     result, out = run_bridge(settings, tmp_path, {"op": "generate", "engine_dir": str(fake_engine), "prompt": "coffee"}, key="")
     assert result["ok"] is False
@@ -345,3 +356,12 @@ def test_publish_auth_error_does_not_leak_token(tmp_path):
     with pytest.raises(deploy.PublishError) as e:
         deploy.publish("nfp_very_secret", site(tmp_path), brand="B", site_id=None, http=http)
     assert "nfp_very_secret" not in str(e.value) and "rejected the token" in str(e.value)
+
+
+def test_name_comes_from_page_title_when_research_fell_back(web_settings):
+    page = PAGE.replace("<head>", "<head><title>Ember &amp; Oak — Specialty Coffee | Bangalore</title>")
+    result = build(WebsiteBuilder(web_settings, runner=FakeRunner([
+        ok(html=page, research="fallback", brand_name="A Premium Website")])))
+    assert result["app_name"] == "Ember & Oak" and result["research"] == "fallback"
+    result = build(WebsiteBuilder(web_settings, runner=FakeRunner([ok(html=page)])))
+    assert result["app_name"] == "Brew Haven"  # research succeeded: its brand name wins

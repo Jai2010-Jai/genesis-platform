@@ -60,6 +60,34 @@ function readStdin() {
   });
 }
 
+// Node's built-in fetch gives up when response headers take more than 300 s; Gemini can take longer than
+// that to write a whole page (seen in practice: "fetch failed" at exactly 301 s). Gemini API requests go through
+// node:https instead, which has no such limit. Genesis's own timeout (GENESIS_WEBSITE_TIMEOUT_SECONDS) still
+// kills the whole bridge. Every other request keeps the normal fetch.
+const GEMINI_HOST = 'generativelanguage.googleapis.com';
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = async (input, init = {}) => {
+  const url = new URL(typeof input === 'string' ? input : input.url);
+  if (url.hostname !== GEMINI_HOST) return nativeFetch(input, init);
+  const https = await import('node:https');
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method: init.method || 'GET', headers: init.headers || {} }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode,
+          text: async () => body, json: async () => JSON.parse(body) });
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    if (init.signal) init.signal.addEventListener('abort', () => req.destroy(new Error('aborted')));
+    if (init.body) req.write(init.body);
+    req.end();
+  });
+};
+
 const calls = [];
 let phase = 'setup';
 const aiText = {}; // phase -> last raw model text
@@ -85,6 +113,11 @@ async function loadEngine(engineDir) {
       throw err;
     }
     const started = Date.now();
+    if (phase === 'research' && !config) {
+      // weave parses this reply as JSON but doesn't ask for JSON; without JSON mode Gemini sometimes returns
+      // invalid JSON and weave silently switches to canned directions.
+      config = { responseMimeType: 'application/json' };
+    }
     try {
       const res = await original(prompt, system, config);
       const usage = res?.raw?.usageMetadata || {};
@@ -123,7 +156,9 @@ async function generate(req, engine) {
   const out = req.out_dir;
   phase = 'research';
   const research = await engine.research.researchDesignInspirations(req.prompt);
-  const researchFromModel = Boolean(lastCall('research')?.ok);
+  // weave returns canned directions when the reply isn't valid JSON, even though the call itself succeeded.
+  const firstName = String(research?.inspirations?.[0]?.name || '');
+  const researchFromModel = Boolean(lastCall('research')?.ok && firstName && (aiText.research || '').includes(firstName));
   const topic = research.topicAnalysis || {};
   const inspirations = (research.inspirations || []).slice(0, 3);
   const count = Math.max(1, Math.min(3, Number(req.variants) || 1));
@@ -145,6 +180,7 @@ async function generate(req, engine) {
     brand_name: String(topic.brandName || '').slice(0, 60),
     headline: String(topic.headline || '').slice(0, 200),
     research: researchFromModel ? 'ai' : 'fallback',
+    brand_from_research: researchFromModel,
     pages,
   };
 }

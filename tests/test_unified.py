@@ -174,6 +174,7 @@ def test_modification_applies_to_the_active_website(u):
     job = u.jobs()[-1]
     assert job["kind"] == "change" and job["base_build_id"] == v1 and job["project_id"] == u.projects()[0]["id"]
     u.drain()
+    assert "Applying your change to the website." in "\n".join(u.all())
     assert u.runner.requests[-1]["op"] == "modify" and u.runner.requests[-1]["feedback"] == "Make the buttons bigger"
     assert "is updated!" in u.last()
     v2 = u.projects()[0]["last_success_build_id"]

@@ -151,7 +151,7 @@ class Settings:
     node_bin: str = field(default_factory=lambda: _str_env("GENESIS_NODE_BIN") or shutil.which("node") or "")
     # Design options generated per new website (each is one more large Gemini call).
     website_variants: int = field(default_factory=lambda: _int_env("GENESIS_WEBSITE_VARIANTS", 1, 1, 3))
-    website_timeout: int = field(default_factory=lambda: _int_env("GENESIS_WEBSITE_TIMEOUT_SECONDS", 600, 60, 1800))
+    website_timeout: int = field(default_factory=lambda: _int_env("GENESIS_WEBSITE_TIMEOUT_SECONDS", 1200, 60, 3600))
     # Publishing is off unless set to netlify AND a token is configured; every publish still needs the owner's PUBLISH.
     website_deploy: str = field(default_factory=lambda: _choice_env("GENESIS_WEBSITE_DEPLOY", "off", {"off", "netlify"}))
     netlify_auth_token: str = field(default_factory=lambda: _str_env("NETLIFY_AUTH_TOKEN"), repr=False)

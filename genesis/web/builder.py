@@ -32,6 +32,19 @@ STAGE_PROGRESS = {"queued": 2, "generating": 20, "validating": 80, "verifying": 
 MAX_OUTPUT_BYTES = 2_000_000
 
 
+def page_title(path: Path) -> str:
+    """The brand part of a generated page's <title> ("Ember & Oak — Specialty Coffee" -> "Ember & Oak")."""
+    import html
+    import re
+
+    try:
+        m = re.search(r"<title[^>]*>(.*?)</title>", path.read_text(encoding="utf-8")[:20000], re.I | re.S)
+    except OSError:
+        return ""
+    title = html.unescape(m.group(1)).strip() if m else ""
+    return re.split(r"\s+[—–|:-]\s+|\s*\|\s*", title, maxsplit=1)[0].strip()
+
+
 class BridgeError(RuntimeError):
     pass
 
@@ -227,7 +240,9 @@ class WebsiteBuilder:
             self._log(job, f"!! Generated website rejected: {e}")
             return self._fail(job, f"Generated website failed validation: {e}")
         self._stage(job, "verifying", "Preparing the preview")
-        name = (result.get("brand_name") or job.get("app_name") or "").strip()[:30] or None
+        name = (result.get("brand_name") if result.get("research") == "ai" or base_id else "") or \
+            page_title(site / "index.html") or result.get("brand_name") or job.get("app_name") or ""
+        name = name.strip()[:30] or None
         job.update(app_name=name, research=result.get("research"),
                    site={"files": files, "pages": result.get("pages") or [], "entry": "index.html",
                          "truncated_input": bool(result.get("truncated_input"))})
