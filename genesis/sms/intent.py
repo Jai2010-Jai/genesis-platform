@@ -91,9 +91,9 @@ _ACK = (r"(?:thanks?(?: you)?|thank u|thx|ty|tysm|cheers|ok(?:ay)?|kk?|cool|nice
 THANKS = _rx(rf"^{_ACK}(?:[\s,!.]+{_ACK})*{SMALL}$")
 HELP = _rx(r"^(?:help|menu|commands|options)\b", r"\bwhat can (?:you|u) do\b", r"\bhow (?:does|do) (?:this|it|you) work",
            r"\bhow (?:do|can) i use\b", r"^(?:what|who) are (?:you|u)\b")
-STATUS = _rx(r"\b(?:status|progress|update|eta)\b\??$", r"\bhow(?:'s| is)\s+(?:it|my app|the build|that)\s+going\b",
+STATUS = _rx(r"\b(?:status|progress|update|eta)\b\??$", r"\bhow(?:'?s| is)\s+(?:it|my app|my site|my website|the build|that|everything)\s+going\b",
              r"\b(?:is|are)\s+(?:it|my app|the app|the build)\s+(?:ready|done|finished|built)\b",
-             r"\bhow (?:long|much longer)\b", r"\bwhat(?:'s| is) (?:happening|going on)\b", r"\bany (?:update|news)\b",
+             r"\bhow (?:long|much longer)\b", r"\bwhat(?:'?s| is) (?:happening|going on)\b", r"\bany (?:update|news)\b",
              r"\bwhere(?:'s| is) my app\b", r"\bdone yet\b", r"\bready yet\b")
 PROJECTS = _rx(r"\b(?:list|show|see|what are)\s+(?:me\s+)?(?:all\s+)?(?:my\s+)?(?:apps|projects)\b",
                r"^(?:my\s+)?(?:apps|projects)\??$", r"\bwhat apps\b", r"\bwhich apps\b")

@@ -495,3 +495,11 @@ def test_slow_ai_falls_back_to_rules(u):
     u.text(OWNER, "Create a premium website for my coffee brand")
     assert u.ai.calls == 1
     assert u.projects()[0]["kind"] == "website" and "designing your website" in u.last()
+
+
+@pytest.mark.parametrize("text", ["hows it going", "how's it going?", "how is my website going", "whats happening"])
+def test_status_spellings_are_instant(u, text):
+    u.ai = SlowAI(30)
+    u.sms.service.brain = ChatBrain(u.settings, u.ai, synchronous=True, website_problem=u.sms.service.website_problem)
+    u.text(OWNER, text)
+    assert u.ai.calls == 0 and "No builds yet" in u.last()
