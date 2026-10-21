@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -143,9 +144,25 @@ class Settings:
         "GENESIS_VOICE_MODEL", "base", {"tiny", "base", "small", "medium", "tiny.en", "base.en", "small.en"}))
     voice_language: str = field(default_factory=lambda: _str_env("GENESIS_VOICE_LANGUAGE", ""))  # "" = auto-detect
 
+    # ---- Website builder: weave's generator (adityapokuri229/weave, src/portfolio/) run through genesis/web/bridge.mjs ----
+    # Path to an unmodified weave checkout. Empty = the website builder is unavailable.
+    website_engine_dir: str = field(default_factory=lambda: _str_env("GENESIS_WEBSITE_ENGINE_DIR"))
+    website_builder: bool = field(default_factory=lambda: _choice_env("GENESIS_WEBSITE_BUILDER", "on", {"on", "off"}) == "on")
+    node_bin: str = field(default_factory=lambda: _str_env("GENESIS_NODE_BIN") or shutil.which("node") or "")
+    # Design options generated per new website (each is one more large Gemini call).
+    website_variants: int = field(default_factory=lambda: _int_env("GENESIS_WEBSITE_VARIANTS", 1, 1, 3))
+    website_timeout: int = field(default_factory=lambda: _int_env("GENESIS_WEBSITE_TIMEOUT_SECONDS", 600, 60, 1800))
+    # Publishing is off unless set to netlify AND a token is configured; every publish still needs the owner's PUBLISH.
+    website_deploy: str = field(default_factory=lambda: _choice_env("GENESIS_WEBSITE_DEPLOY", "off", {"off", "netlify"}))
+    netlify_auth_token: str = field(default_factory=lambda: _str_env("NETLIFY_AUTH_TOKEN"), repr=False)
+
     @property
     def builds_dir(self) -> Path:
         return self.data_dir / "builds"
+
+    @property
+    def sites_dir(self) -> Path:
+        return self.data_dir / "sites"
 
     @property
     def gradle_user_home(self) -> Path:
@@ -231,6 +248,35 @@ class Settings:
         add("Gradle wrapper", wrapper_ok, "template wrapper present" if wrapper_ok else "android_template/gradlew missing",
             "Restore android_template/gradlew and gradle/wrapper from git")
         return {"ready": all(c["ok"] for c in checks), "checks": checks}
+
+    def website_problem(self) -> str:
+        """Why the website builder cannot run (empty when it can). Kept out of doctor(), which gates Android builds."""
+        if not self.website_builder:
+            return "the website builder is switched off (GENESIS_WEBSITE_BUILDER=off)"
+        if not self.website_engine_dir:
+            return "no website engine is configured (GENESIS_WEBSITE_ENGINE_DIR)"
+        engine = Path(self.website_engine_dir).expanduser()
+        if not (engine / "src/portfolio/bespokeHtmlGenerator.js").is_file():
+            return f"the website engine was not found at {engine} (expected a weave checkout with src/portfolio/)"
+        if not self.node_bin or not Path(self.node_bin).is_file():
+            return "Node.js was not found (install Node 20+ or set GENESIS_NODE_BIN)"
+        if self.ai_backend != "api":
+            return "the website engine needs the Gemini API backend (GENESIS_AI_BACKEND=api)"
+        if not self.gemini_api_key:
+            return "GEMINI_API_KEY is missing"
+        return ""
+
+    def website_doctor(self) -> list[dict]:
+        problem = self.website_problem()
+        checks = [{"name": "Website builder", "ok": not problem,
+                   "detail": problem or f"weave engine at {Path(self.website_engine_dir).expanduser()}",
+                   "fix": "" if not problem else "See README: Website builder"}]
+        publish = self.website_deploy == "netlify" and bool(self.netlify_auth_token)
+        checks.append({"name": "Website publishing", "ok": True,
+                       "detail": "Netlify (owner approval per publish)" if publish else
+                                 "off: websites get private previews only (set GENESIS_WEBSITE_DEPLOY=netlify and NETLIFY_AUTH_TOKEN)",
+                       "fix": ""})
+        return checks
 
 
 settings = Settings()
