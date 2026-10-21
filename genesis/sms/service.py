@@ -481,10 +481,10 @@ class SmsService:
         event("sms.job_enqueued", ref=job["ref"], kind="new", project_kind=kind, phone=mask(user["phone"]))
         if kind == "website":
             text = ((f"{lead} " if lead else "Got it! I'm designing your website now. ") +
-                    "It takes about 5-10 minutes. I'll send you the link when it's ready.")
+                    "It takes a few minutes. I'll send you the link when it's ready.")
         else:
             text = ((f"{lead} " if lead else "Got it! I'm turning your idea into an app. ") + f"Build ID: {job['ref']}. "
-                    "I'll message you when it's ready (about 5-10 minutes). Ask \"how's it going?\" anytime.")
+                    "I'll message you when it's ready (usually a few minutes). Ask \"how's it going?\" anytime.")
         self._reply(user["phone"], user, text, job_id=job["id"])
         return "queued_new"
 
@@ -593,7 +593,7 @@ class SmsService:
         event("sms.job_enqueued", ref=job["ref"], kind=job["kind"], phone=mask(user["phone"]))
         if project.get("kind") == "website":
             self._reply(user["phone"], user, (f"{lead} " if lead else f"Got it! Changing {M.name_of(project)} now. ") +
-                        "It takes about 5-10 minutes. I'll send you the new link when it's ready.", job_id=job["id"])
+                        "It takes a few minutes. I'll send you the new link when it's ready.", job_id=job["id"])
             return "queued_change"
         self._reply(user["phone"], user, (f"{lead} " if lead else f"Got it! Updating {M.name_of(project)} "
                                                                     f"(project {project['number']}). ") +

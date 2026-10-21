@@ -55,7 +55,7 @@ def duration(hours: int) -> str:
 def name_of(project: dict | None) -> str:
     if not project:
         return "your app"
-    name = ascii_safe(project.get("name") or "").strip()
+    name = ascii_safe(project.get("name") or "").strip().rstrip(".")
     if name:
         return name
     if project.get("kind") == "website":
