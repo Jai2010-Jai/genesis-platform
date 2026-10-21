@@ -154,11 +154,18 @@ function fromModel(p, html) {
 
 async function generate(req, engine) {
   const out = req.out_dir;
-  phase = 'research';
-  const research = await engine.research.researchDesignInspirations(req.prompt);
-  // weave returns canned directions when the reply isn't valid JSON, even though the call itself succeeded.
-  const firstName = String(research?.inspirations?.[0]?.name || '');
-  const researchFromModel = Boolean(lastCall('research')?.ok && firstName && (aiText.research || '').includes(firstName));
+  // weave returns canned directions when the reply isn't valid JSON, even though the call itself succeeded
+  // (seen intermittently in real runs). Detect that and try the research once more before accepting it.
+  let research;
+  let researchFromModel = false;
+  for (let attempt = 1; attempt <= 2 && !researchFromModel; attempt++) {
+    phase = 'research';
+    aiText.research = '';
+    research = await engine.research.researchDesignInspirations(req.prompt);
+    const firstName = String(research?.inspirations?.[0]?.name || '');
+    researchFromModel = Boolean(lastCall('research')?.ok && firstName && aiText.research.includes(firstName));
+    if (!lastCall('research')?.ok) break; // the API itself failed: retrying won't help, and costs quota
+  }
   const topic = research.topicAnalysis || {};
   const inspirations = (research.inspirations || []).slice(0, 3);
   const count = Math.max(1, Math.min(3, Number(req.variants) || 1));

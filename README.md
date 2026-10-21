@@ -295,4 +295,18 @@ Not yet / limitations:
 - [x] Phone app (Genesis Studio) with pairing, live build tracking, install and share. Tested on an Android 14 emulator
 - [ ] Single-machine, in-process queue. A server restart marks in-flight builds as failed.
 - [ ] Access-code auth only (no user accounts) over LAN HTTP; see the security section before exposing it beyond your network.
-- [ ] No iterative editing ("change the color", "add a screen") of an existing generated app yet.
+- [x] Iterative editing of an existing app by text/chat ("make the theme dark"): change builds modify the last good version.
+
+Unified platform (Android + websites), verified on this machine on 2026-10-21:
+
+- [x] One conversation engine for WhatsApp, SMS and web chat routes to the Android or website builder, asks "app
+      or website?" when unclear, and never builds from greetings or status questions
+- [x] Real end-to-end Android build through the conversation (Gemini API -> Gradle -> verified APK -> token link)
+- [x] Real end-to-end website generation and change with weave's generator (Gemini API), validated and served as a
+      sandboxed private preview
+- [x] Gemini API replaces the unavailable Antigravity bridge (`GENESIS_AI_BACKEND=api`)
+- [ ] Netlify publishing: implemented and tested against a fake API only (no token configured)
+- [ ] Live Twilio delivery of the unified flow: not re-tested (needs the tunnel running, the Twilio webhook URL
+      updated, and real messages sent)
+- [ ] Website builds are not shown in the dashboard History (logs: `data/sites/<id>/build.log`)
+- [ ] Gemini latency on the current key is high (2-6 minutes per large call), so builds take several minutes

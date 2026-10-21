@@ -282,6 +282,7 @@ def test_bridge_detects_research_fallback_after_a_successful_call(settings, tmp_
                              mode="badjson")
     assert result["ok"] is True  # the page itself still came from the model
     assert result["research"] == "fallback" and result["calls"][0]["ok"] is True
+    assert [c["phase"] for c in result["calls"]] == ["research", "research", "html-1"]  # one retry, then accept
     assert (out / "index.html").read_text().startswith("<!DOCTYPE html>")
 
 
