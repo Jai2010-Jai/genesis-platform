@@ -95,6 +95,11 @@ Publishing has been tested only against a fake Netlify API. It has **not** been 
   or working forms.
 - weave sends only the first 8,000 characters of the current page to Gemini when applying a change. Long pages can
   lose content in a change. Genesis records this in the build log.
+- weave's design-research reply sometimes isn't valid JSON (2 of 3 real runs on 2026-10-21; one was before JSON mode
+  was requested). weave then uses generic canned design directions. Genesis retries the research once, records
+  `research: fallback` in the build record when it still fails, and names the site from the page title. The page
+  itself is still written by Gemini.
+- Real runs on this key took 2-4 minutes per Gemini call, so about 5 minutes for a new site and about 5.5 for a change.
 - Website builds don't appear in the local dashboard's History. Their logs are in `data/sites/<id>/build.log`.
 - One website build runs at a time, and each user has one job at a time across both kinds.
 - Generated pages load Tailwind and Google Fonts from public CDNs when viewed.
