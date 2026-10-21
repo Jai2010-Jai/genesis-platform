@@ -351,6 +351,10 @@ class SmsService:
         event("sms.intent", kind=intent.kind, phone=mask(user["phone"]))
         if user["awaiting_new"] and intent.kind in ("new", "change", "ambiguous", "unclear") and len(body) >= MIN_PROMPT:
             return self._start_new(user, body, sid)
+        if (project is not None and intent.kind not in NEVER_BUILDS
+                and other_kind_requested(body, project.get("kind") or "android")):
+            # "can u make me an apk version of this" on a website: a new Android app, whatever else it looks like.
+            return self._start_change(user, project, body, sid)
         kind = intent.kind
         if kind == "greeting":
             if project is not None:
@@ -458,13 +462,13 @@ class SmsService:
                     kind = "android"  # the only builder here: nothing to choose between
                 else:
                     self.store.update_user(user["id"], pending_text=idea, pending_question="kind")
-                    self._reply(user["phone"], user, "Should I build that as an Android app (an APK for your phone) "
-                                                     "or as a website? Reply \"app\" or \"website\".")
+                    self._reply(user["phone"], user, "Should I make that as a phone app (Android APK) or as a website? "
+                                                     "Reply \"app\" or \"website\".")
                     return "ask_kind"
         if kind == "website" and (problem := self.website_problem()):
             event("sms.website_unavailable", phone=mask(user["phone"]))
-            self._reply(user["phone"], user, f"Sorry, I can't build websites on this Genesis server right now ({problem}). "
-                                             "I can build it as an Android app instead: say \"build it as an app\".")
+            self._reply(user["phone"], user, "Sorry, I can't make websites right now. "
+                                             "I can make it as an Android app instead: say \"build it as an app\".")
             return "website_unavailable"
         if (blocked := self._gate(user)) is not None:
             return blocked
@@ -474,12 +478,11 @@ class SmsService:
                                      max_attempts=self.s.sms_job_max_attempts, inbound_sid=sid)
         event("sms.job_enqueued", ref=job["ref"], kind="new", project_kind=kind, phone=mask(user["phone"]))
         if kind == "website":
-            text = ((f"{lead} " if lead else "Got it! I'm designing your website. ") + f"Build ID: {job['ref']}. "
-                    "I'll send a private preview link when it's ready (usually a few minutes). "
-                    "Ask \"how's it going?\" anytime.")
+            text = ((f"{lead} " if lead else "Got it! I'm designing your website now. ") +
+                    "It takes about 5-10 minutes. I'll send you the link when it's ready.")
         else:
             text = ((f"{lead} " if lead else "Got it! I'm turning your idea into an app. ") + f"Build ID: {job['ref']}. "
-                    "I'll message you when it's ready (usually 2-6 min). Ask \"how's it going?\" anytime.")
+                    "I'll message you when it's ready (about 5-10 minutes). Ask \"how's it going?\" anytime.")
         self._reply(user["phone"], user, text, job_id=job["id"])
         return "queued_new"
 
@@ -519,8 +522,8 @@ class SmsService:
                                              "still works: say \"send the link\".")
             return "publish_forbidden"
         if (problem := self.publish_problem()):
-            self._reply(user["phone"], user, f"I can't publish: {problem}. Your website stays a private preview "
-                                             "(say \"send the link\").")
+            self._reply(user["phone"], user, "Putting websites on the public internet isn't turned on yet, so your "
+                                             "website stays private. Say \"send the link\" to see it.")
             return "publish_unavailable"
         build_id = project["last_success_build_id"]
         if not build_id or not self._build_ok(build_id, "website"):
@@ -586,6 +589,10 @@ class SmsService:
                                      max_attempts=self.s.sms_job_max_attempts, inbound_sid=sid)
         self.store.add_change(project["id"], change[:1000])
         event("sms.job_enqueued", ref=job["ref"], kind=job["kind"], phone=mask(user["phone"]))
+        if project.get("kind") == "website":
+            self._reply(user["phone"], user, (f"{lead} " if lead else f"Got it! Changing {M.name_of(project)} now. ") +
+                        "It takes about 5-10 minutes. I'll send you the new link when it's ready.", job_id=job["id"])
+            return "queued_change"
         self._reply(user["phone"], user, (f"{lead} " if lead else f"Got it! Updating {M.name_of(project)} "
                                                                     f"(project {project['number']}). ") +
                                          f"Build ID: {job['ref']}. I'll text you when it's ready. "
@@ -632,26 +639,25 @@ class SmsService:
             self._reply(user["phone"], user, text)
             return "status"
         if job["status"] == "queued":
-            text = f"{ref} ({name}) is waiting for a build slot."
+            text = f"{name[0].upper() + name[1:]} is waiting for a build slot and will start soon. (Build {ref})"
             if job["attempts"]:
-                text = f"{ref} ({name}) hit a temporary problem and will retry shortly."
+                text = f"{name[0].upper() + name[1:]} hit a temporary problem. I'll try again shortly. (Build {ref})"
         elif job["status"] == "running":
-            text = f"{ref} ({name}) is running."
+            text = f"Working on {name} now. (Build {ref})"
             if job["build_id"]:
                 b = self.build_record(job["build_id"], "website" if website else "android")
                 if b is not None:
                     table = M.WEB_PROGRESS if website else M.PROGRESS
                     stage = table.get(b.get("stage", ""), (None, None, b.get("message") or ""))[2]
-                    text = f"{ref} ({name}): {stage}"
+                    text = f"Working on {name} now: {stage} (Build {ref})"
             if job["cancel_requested"]:
                 text += " Stopping it now."
         elif job["status"] == "succeeded":
-            text = f"{ref} ({name}) is ready. " + ("Say \"send the link\" for the preview." if website else
-                                                    "Reply OPEN for the download link.")
+            text = f"{name[0].upper() + name[1:]} is ready! Say \"send the link\" to get it. (Build {ref})"
         elif job["status"] == "cancelled":
-            text = f"{ref} ({name}) was cancelled. Reply RETRY to build it again."
+            text = f"Build {ref} ({name}) was cancelled. Reply RETRY to build it again."
         else:
-            text = f"{ref} ({name}) failed. {M.failure_reason(job['error'])} Reply RETRY to try again."
+            text = f"Build {ref} ({name}) failed. {M.failure_reason(job['error'])} Reply RETRY to try again."
         self._reply(user["phone"], user, text)
         return "status"
 
@@ -675,7 +681,7 @@ class SmsService:
             label = " (website)" if p.get("kind") == "website" else ""
             lines.append(f"{p['number']} {M.name_of(p)}{label} - {state}{star}")
         title = "Your projects" if any(p.get("kind") == "website" for p in projects) else "Your apps"
-        self._reply(user["phone"], user, f"{title} (* = active):\n" + "\n".join(lines) + "\nReply USE <n> to switch.")
+        self._reply(user["phone"], user, f"{title} (* = active):\n" + "\n".join(lines) + "\nSay \"switch to <number>\" to pick one.")
         return "projects"
 
     def _use(self, user: dict, rest: str) -> str:
@@ -684,7 +690,7 @@ class SmsService:
         if project is None:
             return self._clarify(user, "I couldn't find that project.")
         self.store.update_user(user["id"], active_project_id=project["id"], awaiting_new=0)
-        self._reply(user["phone"], user, f"Now working on {M.name_of(project)}. Text a change, or OPEN for its link.")
+        self._reply(user["phone"], user, f"Now working on {M.name_of(project)}. Tell me a change, or say \"send the link\".")
         return "use"
 
     def _open(self, user: dict, rest: str) -> str:
@@ -699,12 +705,12 @@ class SmsService:
             return "open_none"
         if kind == "website":
             url = self.preview_url(user["id"], build_id, relative_ok=user["channel"] == "web")
-            lines = [f"{M.name_of(project)} (website)"]
+            lines = [f"Here's your website {M.name_of(project)}:"]
             if url:
-                lines.append(f"Private preview (only people with this link, expires in {self.s.sms_link_ttl_hours}h): {url}")
+                lines.append(f"{url}\n(Private link, works for {M.duration(self.s.sms_link_ttl_hours)}.)")
             else:
-                lines.append("Preview links aren't configured on the Genesis server (PUBLIC_BASE_URL).")
-            lines.append(f"Published at: {project['deploy_url']}" if project.get("deploy_url") else "Not published.")
+                lines.append("(The link isn't set up on the Genesis server yet.)")
+            lines.append(f"It's also live at: {project['deploy_url']}" if project.get("deploy_url") else "Not published.")
             self._reply(user["phone"], user, "\n".join(lines))
             return "open"
         url = self.download_url(user["id"], build_id, relative_ok=user["channel"] == "web")
@@ -712,7 +718,8 @@ class SmsService:
             self._reply(user["phone"], user, "Download links aren't configured on the Genesis server (PUBLIC_BASE_URL).")
             return "open_unconfigured"
         self._reply(user["phone"], user, f"{M.name_of(project)} (Android APK): {url}\n"
-                                         f"Link expires in {self.s.sms_link_ttl_hours}h.")
+                                         f"Open it on your Android phone to install. The link works for "
+                                         f"{M.duration(self.s.sms_link_ttl_hours)}.")
         return "open"
 
     def _cancel(self, user: dict) -> str:

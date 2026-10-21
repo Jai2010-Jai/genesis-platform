@@ -45,14 +45,22 @@ def fit(text: str, limit: int = MAX_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
+def duration(hours: int) -> str:
+    if hours % 24 == 0:
+        days = hours // 24
+        return f"{days} day{'s' if days != 1 else ''}"
+    return f"{hours} hours"
+
+
 def name_of(project: dict | None) -> str:
     if not project:
         return "your app"
     name = ascii_safe(project.get("name") or "").strip()
     if name:
         return name
-    words = ascii_safe(project.get("original_prompt") or "").split()[:5]
-    return f'your "{" ".join(words)}{"..." if len(words) == 5 else ""}" app' if words else f"Project {project['number']}"
+    if project.get("kind") == "website":
+        return "your website"
+    return "your app"
 
 
 def failure_reason(error: str | None) -> str:

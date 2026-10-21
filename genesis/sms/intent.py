@@ -15,7 +15,7 @@ NEW_APP = re.compile(
     r"(?:a|an|another|one|my)\s+(?:new\s+)?(?:[\w'-]+\s+){0,6}?(?:app|application|tracker|calculator|planner|"
     r"journal|timer|counter|game|manager|organi[sz]er|flashcards?|quiz|to-?do list|notes?|diary|log|budget)\b"
     r"|\b(?:new|another|second|separate|different|fresh)\s+app\b"
-    r"|\b(?:i\s+(?:want|need|would like|'d like)|can you (?:make|build|create)|could you (?:make|build|create))\s+"
+    r"|\b(?:i\s+(?:want|need|would like|'d like)|can (?:you|u) (?:make|build|create)|could (?:you|u) (?:make|build|create))\s+"
     r"(?:a|an|another|one|me a|me an)\s+(?:[\w'-]+\s+){0,6}?(?:app|application|game|tracker|calculator)\b"
     r"|^(?:an?\s+)?(?:[\w'-]+\s+){0,4}?app\s+(?:that|which|to|for|where|with)\b", re.I)
 

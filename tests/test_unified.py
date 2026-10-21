@@ -144,7 +144,7 @@ def test_progress_messages_reflect_real_website_stages(u):
 
 def test_unclear_target_asks_android_or_website(u):
     u.text(OWNER, "Build something for my bakery with opening hours")
-    assert "Android app" in u.last() and "website" in u.last()
+    assert "phone app" in u.last() and "website" in u.last()
     assert u.jobs() == []
     u.text(OWNER, "website")
     assert u.projects()[0]["kind"] == "website" and len(u.jobs()) == 1
@@ -270,7 +270,7 @@ def test_failed_website_change_keeps_last_good_version(settings, tmp_path):
 def test_website_requests_are_refused_honestly_when_unavailable(settings, tmp_path):
     u = UEnv(settings, tmp_path, websites=False)
     u.text(OWNER, "Create a premium website for my coffee brand")
-    assert "can't build websites" in u.last() and "GENESIS_WEBSITE_ENGINE_DIR" in u.last()
+    assert "can't make websites" in u.last()
     assert u.jobs() == [] and u.projects() == []
     u.text(OWNER, "hi")
     assert "website" not in u.last().lower()
@@ -335,7 +335,7 @@ def test_publishing_off_by_default_and_never_anonymous(u):
     u.drain()
     assert "publish it" not in u.last()
     u.text(OWNER, "publish it")
-    assert "can't publish" in u.last()
+    assert "isn't turned on" in u.last()
     u.text(OWNER, "PUBLISH")
     u.drain()
     assert u.publisher.calls == []
@@ -416,7 +416,7 @@ def test_brain_told_websites_unavailable(settings, tmp_path):
                    ChatDecision(reply="Sure!", action="new_website", spec="A website for my coffee brand"))
     e.text(OWNER, "Create a premium website for my coffee brand")
     assert "Never use new_website" in e.ai.systems[0]
-    assert e.jobs() == [] and "can't build websites" in e.last()
+    assert e.jobs() == [] and "can't make websites" in e.last()
 
 
 # ---------- web chat shares the same projects ----------
@@ -538,3 +538,17 @@ def test_website_request_on_an_android_app_builds_a_new_website(u):
     u.drain()
     u.text(OWNER, "now make a website for this app")
     assert [p["kind"] for p in u.projects()] == ["android", "website"]
+
+
+@pytest.mark.parametrize("text", [APK_ASK, "can u make me a phone apk version of this so i can order coffee from this",
+                                  "could you build an android app of this?"])
+def test_apk_request_phrased_as_question_still_builds_the_app(u, text):
+    u.settings.chat_timeout = 1
+    u.text(OWNER, "Create a premium website for my coffee brand")
+    u.drain()
+    with_brain(u)
+    u.ai.ask = SlowAI(5).ask  # the AI times out, so the built-in rules decide
+    u.text(OWNER, text)
+    assert [p["kind"] for p in u.projects()] == ["website", "android"]
+    u.drain()
+    assert "/download/" in u.last()

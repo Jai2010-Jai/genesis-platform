@@ -178,12 +178,8 @@ class SmsWorker:
             return
         self.store.update_job(job["id"], status="failed", error=error[:1000])
         event("sms.job_failed", logging.WARNING, ref=job["ref"], attempts=job["attempts"])
-        project = self.store.project(job["user_id"], job["project_id"])
-        where = ("the website build log (data/sites) on the Genesis computer" if project and project.get("kind") == "website"
-                 else "the Genesis dashboard")
         self._notify(job, user, f"Sorry, build {job['ref']} failed. {M.failure_reason(error)} "
-                                f"Technical details are in {where}. Reply RETRY to try again, "
-                                "or text a simpler description.")
+                                "Reply RETRY to try again, or describe it more simply.")
 
     def _finish_cancelled(self, job: dict, user: dict | None) -> None:
         self.store.update_job(job["id"], status="cancelled", error="Cancelled by user")
@@ -209,7 +205,7 @@ class SmsWorker:
         text = (f"Your {M.name_of(project)} is {verb}!\nBuild: {job['ref']}\nStatus: Successful\n"
                 + (f"Download (Android APK, {size}): {url}\n" if url else
                    "Download links are not configured (PUBLIC_BASE_URL). Get the APK from the Genesis dashboard.\n")
-                + "Text a change (e.g. \"add a dark theme\"), or STATUS / HELP.")
+                + "Open the link on your Android phone to install it. Want changes? Just tell me, like \"add a dark theme\".")
         self._notify(job, user, text)
 
     def _finish_website(self, job: dict, user: dict | None, build: dict) -> None:
@@ -217,22 +213,23 @@ class SmsWorker:
             return self._after_failure(job, "Build reported success but the website files are missing")
         project = self.store.project(job["user_id"], job["project_id"])
         if project:
-            self.store.update_project(project["id"], name=build.get("app_name") or project["name"],
-                                      last_success_build_id=build["id"])
+            # A change keeps the site's name; a new site takes the name the engine found.
+            name = project["name"] if job["kind"] == "change" and project["name"] else build.get("app_name") or project["name"]
+            self.store.update_project(project["id"], name=name, last_success_build_id=build["id"])
             project = self.store.project(job["user_id"], job["project_id"])
         self.store.update_job(job["id"], status="succeeded", error=None)
         event("sms.job_succeeded", ref=job["ref"], build=build["id"], kind="website")
         url = self.service.preview_url(job["user_id"], build["id"], relative_ok=bool(user and user["channel"] == "web"))
         verb = "updated" if job["kind"] == "change" else "ready"
-        lines = [f"Your website {M.name_of(project)} is {verb}!", f"Build: {job['ref']}",
-                 "Status: generated and checked on the Genesis server (not published)"]
-        lines.append(f"Private preview (expires in {self.s.sms_link_ttl_hours}h): {url}" if url else
-                     "Preview links are not configured (PUBLIC_BASE_URL).")
+        lines = [f"Your website {M.name_of(project)} is {verb}!"]
+        lines.append(f"Open it here: {url}" if url else "(The link isn't set up on the Genesis server yet.)")
+        lines.append(f"This link is private, just for you, and works for {M.duration(self.s.sms_link_ttl_hours)}. "
+                     "The site is not published on the internet.")
         if project and project.get("deploy_url"):
-            lines.append(f"The public site {project['deploy_url']} still shows the previously published version.")
-        hint = "Text a change (e.g. \"make the hero darker\")"
+            lines.append(f"Your public site {project['deploy_url']} still shows the older version.")
+        hint = "Want changes? Just tell me, like \"make the top darker\""
         if user and user["role"] == "owner" and not self.service.publish_problem():
-            hint += ", or \"publish it\" to put it online"
+            hint += ", or say \"publish it\" to put it online"
         lines.append(hint + ".")
         self._notify(job, user, "\n".join(lines))
 
