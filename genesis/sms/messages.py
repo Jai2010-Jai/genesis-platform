@@ -89,7 +89,7 @@ def failure_reason(error: str | None) -> str:
     if "interrupted" in e:
         return "The Genesis server restarted during the build."
     if "could not design the website" in e:
-        return "The AI service is busy right now. Wait a minute and try again."
+        return "The AI service is busy right now, so please wait a minute."
     if "website builder unavailable" in e:
         return "Website building isn't set up on the Genesis server."
     if "did not apply the change" in e:

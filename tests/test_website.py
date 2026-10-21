@@ -185,7 +185,8 @@ export class GeminiClient {
     const mode = process.env.FAKE_MODE;
     if (mode === 'down') throw new Error('Gemini API error (503): overloaded key=AIzaSyFAKEFAKEFAKEFAKEFAKEFAKE');
     if (system.includes('Design Director') && mode === 'badjson') return { text: '{"topicAnalysis": {"brandName": "X",}', raw: {} };
-    if (system.includes('Design Director') && config?.responseMimeType !== 'application/json') return { text: 'not json', raw: {} };
+    if (system.includes('Design Director') && !(config?.responseMimeType === 'application/json'
+        && config?.responseJsonSchema?.properties?.inspirations?.minItems === 3)) return { text: 'not json', raw: {} };
     if (system.includes('Design Director')) return { text: JSON.stringify({ topicAnalysis: { brandName: 'Brew Haven' },
       inspirations: [{ name: 'Roast', sourceInspiration: 'Cafe' }, { name: 'B' }, { name: 'C' }] }), raw: {} };
     if (mode === 'nohtml') return { text: 'Sorry, I cannot.', raw: {} };

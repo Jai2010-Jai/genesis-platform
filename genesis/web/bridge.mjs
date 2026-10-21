@@ -88,6 +88,41 @@ globalThis.fetch = async (input, init = {}) => {
   });
 };
 
+// The exact shape weave's researcher reads. With a schema Gemini must return valid JSON (JSON mode alone still
+// produced invalid JSON in real runs). weave's long `stitchPrompt` is left out: it's only used for Google Stitch.
+const STR = { type: 'string' };
+const RESEARCH_SCHEMA = {
+  type: 'object',
+  properties: {
+    topicAnalysis: {
+      type: 'object',
+      properties: {
+        domain: STR, brandName: STR, tagline: STR, headline: STR, targetAudience: STR,
+        benchmarkSites: { type: 'array', items: STR },
+        keyFeatures: { type: 'array', items: { type: 'object', properties: { title: STR, description: STR, metric: STR },
+          required: ['title', 'description', 'metric'] } },
+      },
+      required: ['domain', 'brandName', 'tagline', 'headline', 'keyFeatures'],
+    },
+    inspirations: {
+      type: 'array', minItems: 3, maxItems: 3,
+      items: {
+        type: 'object',
+        properties: {
+          option: { type: 'integer' }, id: STR, name: STR, sourceInspiration: STR, aestheticDescription: STR,
+          fontHeading: STR, fontBody: STR, googleFontsUrl: STR, stitchHeadlineFont: STR, stitchBodyFont: STR,
+          colors: { type: 'object', properties: { bg: STR, bgCard: STR, accent: STR, accentSecondary: STR, textPrimary: STR,
+            textMuted: STR, border: STR }, required: ['bg', 'bgCard', 'accent', 'accentSecondary', 'textPrimary', 'textMuted', 'border'] },
+          components: { type: 'array', items: STR },
+        },
+        required: ['option', 'id', 'name', 'sourceInspiration', 'aestheticDescription', 'fontHeading', 'fontBody',
+          'googleFontsUrl', 'colors', 'components'],
+      },
+    },
+  },
+  required: ['topicAnalysis', 'inspirations'],
+};
+
 const calls = [];
 let phase = 'setup';
 const aiText = {}; // phase -> last raw model text
@@ -116,7 +151,7 @@ async function loadEngine(engineDir) {
     if (phase === 'research' && !config) {
       // weave parses this reply as JSON but doesn't ask for JSON; without JSON mode Gemini sometimes returns
       // invalid JSON and weave silently switches to canned directions.
-      config = { responseMimeType: 'application/json' };
+      config = { responseMimeType: 'application/json', responseJsonSchema: RESEARCH_SCHEMA };
     }
     try {
       const res = await original(prompt, system, config);
