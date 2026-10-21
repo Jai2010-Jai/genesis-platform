@@ -249,7 +249,8 @@ def run_bridge(settings, tmp_path, request, mode="ok", key="AIzaSyFAKEFAKEFAKEFA
     sandbox = tmp_path / f"sb-{mode}"
     sandbox.mkdir(exist_ok=True)
     env = {"PATH": f"{Path(settings.node_bin).parent}:/usr/bin:/bin", "HOME": str(sandbox), "GEMINI_API_KEY": key,
-           "GEMINI_MODEL": "fake-model", "FAKE_MODE": mode, "WEAVE_DATA_DIR": str(sandbox)}
+           "GEMINI_MODEL": "fake-model", "FAKE_MODE": mode, "WEAVE_DATA_DIR": str(sandbox),
+           "GENESIS_RESEARCH_RETRY_MS": "0"}
     log = tmp_path / "bridge.log"
     result = node_runner(settings)({**request, "out_dir": str(out)}, env, sandbox, 60, threading.Event(), log)
     return result, out
@@ -269,7 +270,7 @@ def test_bridge_generates_page_from_model(settings, tmp_path, fake_engine):
 def test_bridge_reports_canned_fallback_as_failure_and_redacts(settings, tmp_path, fake_engine):
     result, out = run_bridge(settings, tmp_path, {"op": "generate", "engine_dir": str(fake_engine), "prompt": "coffee"}, mode="down")
     assert result["ok"] is False
-    assert "did not produce" in result["error"]
+    assert "could not design" in result["error"]  # research fails first now; no canned page either way
     assert not (out / "index.html").exists()
     assert "AIzaSy" not in json.dumps(result)
     result, _ = run_bridge(settings, tmp_path, {"op": "generate", "engine_dir": str(fake_engine), "prompt": "coffee"}, mode="nohtml")
@@ -280,10 +281,10 @@ def test_bridge_reports_canned_fallback_as_failure_and_redacts(settings, tmp_pat
 def test_bridge_detects_research_fallback_after_a_successful_call(settings, tmp_path, fake_engine):
     result, out = run_bridge(settings, tmp_path, {"op": "generate", "engine_dir": str(fake_engine), "prompt": "coffee"},
                              mode="badjson")
-    assert result["ok"] is True  # the page itself still came from the model
-    assert result["research"] == "fallback" and result["calls"][0]["ok"] is True
-    assert [c["phase"] for c in result["calls"]] == ["research", "research", "html-1"]  # one retry, then accept
-    assert (out / "index.html").read_text().startswith("<!DOCTYPE html>")
+    # weave's canned directions would name the site after the prompt's first words: retry, then fail honestly.
+    assert result["ok"] is False and "could not design" in result["error"]
+    assert [c["phase"] for c in result["calls"]] == ["research", "research", "research"]
+    assert not (out / "index.html").exists()
 
 
 @needs_node

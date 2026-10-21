@@ -154,17 +154,21 @@ function fromModel(p, html) {
 
 async function generate(req, engine) {
   const out = req.out_dir;
-  // weave returns canned directions when the reply isn't valid JSON, even though the call itself succeeded
-  // (seen intermittently in real runs). Detect that and try the research once more before accepting it.
+  // weave silently swaps in canned directions (with the first words of the prompt as the "brand name") when the
+  // research call fails or its reply isn't valid JSON. Both happen in practice; retry, then fail honestly rather
+  // than build a site called "Can U Build".
   let research;
   let researchFromModel = false;
-  for (let attempt = 1; attempt <= 2 && !researchFromModel; attempt++) {
+  for (let attempt = 1; attempt <= 3 && !researchFromModel; attempt++) {
+    if (attempt > 1) await new Promise((r) => setTimeout(r, Number(process.env.GENESIS_RESEARCH_RETRY_MS ?? 5000) * attempt));
     phase = 'research';
     aiText.research = '';
     research = await engine.research.researchDesignInspirations(req.prompt);
     const firstName = String(research?.inspirations?.[0]?.name || '');
     researchFromModel = Boolean(lastCall('research')?.ok && firstName && aiText.research.includes(firstName));
-    if (!lastCall('research')?.ok) break; // the API itself failed: retrying won't help, and costs quota
+  }
+  if (!researchFromModel) {
+    return { ok: false, error: failure('research', 'The AI could not design the website (busy or invalid reply)') };
   }
   const topic = research.topicAnalysis || {};
   const inspirations = (research.inspirations || []).slice(0, 3);
