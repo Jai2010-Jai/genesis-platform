@@ -137,7 +137,9 @@ class Settings:
     sms_link_ttl_hours: int = field(default_factory=lambda: _int_env("GENESIS_SMS_LINK_TTL_HOURS", 72, 1, 720))
     # Chat brain: plain-language conversation through the AI backend (Antigravity or the API). off = rules only.
     chat_brain: bool = field(default_factory=lambda: _choice_env("GENESIS_CHAT_BRAIN", "on", {"on", "off"}) == "on")
-    chat_timeout: int = field(default_factory=lambda: _int_env("GENESIS_CHAT_TIMEOUT_SECONDS", 90, 15, 600))
+    chat_timeout: int = field(default_factory=lambda: _int_env("GENESIS_CHAT_TIMEOUT_SECONDS", 90, 5, 600))
+    # Model for chat replies only (Gemini API backend). A light model answers in ~2 s; empty = GEMINI_MODEL.
+    chat_model: str = field(default_factory=lambda: _str_env("GENESIS_CHAT_MODEL"))
     # Voice notes (WhatsApp/MMS audio) are transcribed locally with Whisper. Models: tiny | base | small | medium.
     voice_enabled: bool = field(default_factory=lambda: _choice_env("GENESIS_VOICE", "on", {"on", "off"}) == "on")
     voice_model: str = field(default_factory=lambda: _choice_env(

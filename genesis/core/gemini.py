@@ -90,14 +90,14 @@ class GeminiClient:
         return self._structured(prompts.SYSTEM, prompts.repair_prompt(diagnostics, files, manifest), RepairPatch)
 
     def ask(self, system: str, user: str, schema: type[BaseModel], title: str = "", timeout: int | None = None):
-        """One structured request with a custom system prompt (used by the chat brain)."""
-        return self._structured(system, user, schema)
+        """One structured request with a custom system prompt (used by the chat brain, on GENESIS_CHAT_MODEL if set)."""
+        return self._structured(system, user, schema, model=self.s.chat_model or None)
 
-    def _structured(self, system: str, user: str, schema: type[BaseModel], attempts: int = 2):
+    def _structured(self, system: str, user: str, schema: type[BaseModel], attempts: int = 2, model: str | None = None):
         from google.genai import types
 
         client = self._get_client()
-        model = self.model_name()
+        model = model or self.model_name()
         last_err = ""
         for attempt in range(1, attempts + 1):
             contents = user if attempt == 1 else (

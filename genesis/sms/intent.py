@@ -100,8 +100,9 @@ def _rx(*patterns: str) -> re.Pattern:
 
 
 SMALL = r"[\s!.?,:)(*~😊🙂👍🙏❤️🔥💯]*"
-GREETING = _rx(rf"^(?:hi+|hey+|hello+|hiya|yo+|sup|wassup|what'?s up|hola|namaste|good (?:morning|afternoon|evening))"
-               rf"(?:\s+(?:there|genesis|bro|man|buddy|dude))?{SMALL}$")
+_HELLO = (r"(?:hi+|hey+|hello+|hiya|yo+|sup|wa+s+up|whats\s*up|what'?s\s+up|wazzup|hola|namaste|good (?:morning|afternoon|evening)|"
+          r"there|genesis|bro|bruh|man|buddy|dude|how\s+(?:are|r)\s+(?:you|u)|hru)")
+GREETING = _rx(rf"^{_HELLO}(?:[\s,!.?]+{_HELLO})*{SMALL}$")
 _ACK = (r"(?:thanks?(?: you)?|thank u|thx|ty|tysm|cheers|ok(?:ay)?|kk?|cool|nice|great|awesome|perfect|amazing|"
         r"sweet|got it|alright|sure|lol|haha+|wow|love it|works|it works|so much|a lot|bro|man|buddy|dude|genesis|"
         r"👍|🙏|❤️|🔥)")

@@ -36,7 +36,9 @@ NEW_INTENT = re.compile(
     r"organi[sz]er|flashcards?|quiz|to-?do list)\b"
     r"|\b(?:new|another|second|separate|different)\s+app\b", re.I)
 REF_RE = re.compile(r"^G-[2-9A-HJ-NP-TV-Z]{5}$", re.I)
-INSTANT = {"greeting", "thanks", "help", "status", "projects", "download", "cancel"}
+# Factual requests are answered from Genesis's own data right away; greetings and chat go to the AI so it can talk
+# naturally (with a light chat model that takes ~2 s), falling back to the rules if it's slow.
+INSTANT = {"help", "status", "projects", "download", "cancel"}
 NEVER_BUILDS = {"greeting", "thanks", "help", "status", "projects", "download", "cancel", "publish"}
 
 

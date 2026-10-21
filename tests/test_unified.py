@@ -483,7 +483,7 @@ class SlowAI:
 def test_simple_messages_never_wait_for_the_ai(u):
     u.ai = SlowAI(30)
     u.sms.service.brain = ChatBrain(u.settings, u.ai, synchronous=True, website_problem=u.sms.service.website_problem)
-    for text in ("hi", "What are you building?", "show my projects", "thanks"):
+    for text in ("What are you building?", "show my projects", "send the link", "cancel it"):
         u.text(OWNER, text)
     assert u.ai.calls == 0 and len(u.all()) == 4
 
@@ -552,3 +552,15 @@ def test_apk_request_phrased_as_question_still_builds_the_app(u, text):
     assert [p["kind"] for p in u.projects()] == ["website", "android"]
     u.drain()
     assert "/download/" in u.last()
+
+
+@pytest.mark.parametrize("text", ["yo whatsup", "hey bro whats up", "how are you", "hello there genesis!"])
+def test_casual_greetings_are_greetings(u, text):
+    u.text(OWNER, text)
+    assert u.last().startswith("Genesis: Hey!") and u.jobs() == []
+
+
+def test_greetings_go_to_the_ai_for_a_natural_reply(u):
+    with_brain(u, ChatDecision(reply="Yo! Not much, just here to build stuff. Got an idea?"))
+    u.text(OWNER, "yo hi")
+    assert u.last() == "Genesis: Yo! Not much, just here to build stuff. Got an idea?" and u.jobs() == []
