@@ -503,3 +503,38 @@ def test_status_spellings_are_instant(u, text):
     u.sms.service.brain = ChatBrain(u.settings, u.ai, synchronous=True, website_problem=u.sms.service.website_problem)
     u.text(OWNER, text)
     assert u.ai.calls == 0 and "No builds yet" in u.last()
+
+
+# ---------- asking for the other kind while a project is active ----------
+APK_ASK = "can u also make me a phone apk version of ts so i can order coffee from this"
+
+
+@pytest.mark.parametrize("brain", [False, True])
+def test_apk_request_on_a_website_builds_a_new_android_app(u, brain):
+    u.text(OWNER, "Create a premium website for my coffee brand")
+    u.drain()
+    site = u.projects()[0]
+    if brain:  # the model wrongly calls it a change; the server still makes an app
+        with_brain(u, ChatDecision(reply="Sure!", action="change_app", spec=APK_ASK))
+    u.text(OWNER, APK_ASK)
+    projects = u.projects()
+    assert [p["kind"] for p in projects] == ["website", "android"]
+    assert "Brew Haven" in projects[1]["original_prompt"] and APK_ASK in projects[1]["original_prompt"]
+    u.drain()
+    assert "/download/" in u.last() and "/preview/" not in u.last()
+    assert [r["op"] for r in u.runner.requests] == ["generate"]  # the website was not touched
+    assert u.projects()[0]["last_success_build_id"] == site["last_success_build_id"]
+
+
+def test_real_website_edits_mentioning_apps_stay_website_changes(u):
+    u.text(OWNER, "Create a premium website for my coffee brand")
+    u.drain()
+    u.text(OWNER, "add a button to download our phone app")
+    assert u.jobs()[-1]["kind"] == "change" and len(u.projects()) == 1
+
+
+def test_website_request_on_an_android_app_builds_a_new_website(u):
+    u.text(OWNER, "Build an Android inventory app with stock counts")
+    u.drain()
+    u.text(OWNER, "now make a website for this app")
+    assert [p["kind"] for p in u.projects()] == ["android", "website"]

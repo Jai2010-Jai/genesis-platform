@@ -49,6 +49,23 @@ def target_kind(text: str) -> str | None:
     return "android" if APP_NOUNS.search(text) else None
 
 
+_CREATE = r"\b(?:make|build|create|generate|want|need|turn|convert|give\s+me|get\s+me|send\s+me)\b"
+WANTS_ANDROID = re.compile(_CREATE + r".{0,80}?\b(?:apk|android|(?:phone|mobile)\s+app|app\s+version|(?:an?|the)\s+app)\b"
+                           r"|\b(?:apk|android|app|phone|mobile)\s+version\b", re.I)
+WANTS_WEBSITE = re.compile(_CREATE + r".{0,80}?\b(?:web\s*site|landing\s+page|web\s+page|homepage)\b"
+                           r"|\b(?:web\s*site|web)\s+version\b", re.I)
+
+
+def other_kind_requested(text: str, current: str) -> str | None:
+    """'android' when someone working on a website asks for an app/APK of it (or 'website' the other way round):
+    that is a new project of the other kind, never a change to the current one."""
+    if current == "website" and WANTS_ANDROID.search(text):
+        return "android"
+    if current == "android" and WANTS_WEBSITE.search(text):
+        return "website"
+    return None
+
+
 def answer_kind(text: str) -> str | None:
     """Reply to "Android app or website?": 'android', 'website', 'no' or None."""
     t = text.strip().lower()

@@ -17,7 +17,7 @@ from ..core.jobs import JobStore
 from . import messages as M
 from .observe import event
 from .phone import mask, normalize_e164
-from .intent import answer_kind, answer_reply, classify, substance, target_kind
+from .intent import answer_kind, answer_reply, classify, other_kind_requested, substance, target_kind
 from .store import SmsStore
 
 MIN_PROMPT, MAX_PROMPT = 10, 4000
@@ -560,6 +560,13 @@ class SmsService:
         return "queued_publish"
 
     def _start_change(self, user: dict, project: dict, change: str, sid: str, lead: str = "") -> str:
+        current = project.get("kind") or "android"
+        if (other := other_kind_requested(change, current)) is not None:
+            # "make me an APK version of this" while a website is active: a new Android app based on it.
+            event("sms.cross_kind", from_kind=current, to_kind=other, phone=mask(user["phone"]))
+            spec = (f"{change.strip()}\n\nBase it on my existing {'website' if current == 'website' else 'Android app'} "
+                    f"\"{M.name_of(project)}\": {project['original_prompt'][:1500]}")
+            return self._start_new(user, spec, sid, kind=other)
         if (blocked := self._gate(user)) is not None:
             return blocked
         changes = json.loads(project["changes"]) + [change[:1000]]
