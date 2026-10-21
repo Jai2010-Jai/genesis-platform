@@ -9,6 +9,7 @@ model can never act outside what the user's own commands could do.
 from __future__ import annotations
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
@@ -113,7 +114,24 @@ class ChatBrain:
             self._pool.submit(fn)
 
     def decide(self, context: str) -> ChatDecision:
-        decision, meta = self.ai.ask(system_prompt(self.website_problem()), context, ChatDecision, title="Genesis chat",
-                                     timeout=self.s.chat_timeout)
+        """Ask the AI, but never wait longer than GENESIS_CHAT_TIMEOUT_SECONDS: past that the caller answers with
+        the built-in rules instead (the slow call is abandoned in its own thread)."""
+        system = system_prompt(self.website_problem())
+        box: dict = {}
+
+        def call() -> None:
+            try:
+                box["result"] = self.ai.ask(system, context, ChatDecision, title="Genesis chat", timeout=self.s.chat_timeout)
+            except BaseException as e:  # noqa: BLE001 - re-raised in the caller
+                box["error"] = e
+
+        t = threading.Thread(target=call, name="genesis-brain-call", daemon=True)
+        t.start()
+        t.join(self.s.chat_timeout)
+        if t.is_alive():
+            raise TimeoutError(f"the AI did not answer within {self.s.chat_timeout}s")
+        if "error" in box:
+            raise box["error"]
+        decision, meta = box["result"]
         log.info("chat brain: action=%s seconds=%s", decision.action, meta.get("seconds"))
         return decision

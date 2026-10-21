@@ -61,7 +61,9 @@ def test_change_status_download_and_switch(env):
     say(env, "make the buttons bigger", ChatDecision(reply="Sure, making them bigger.", action="change_app",
                                                       spec="Make all buttons larger."))
     assert env.jobs()[-1]["kind"] == "change" and env.jobs()[-1]["change_request"] == "Make all buttons larger."
-    assert env.jobs()[-1]["ref"] in say(env, "how's it going", ChatDecision(reply="", action="status"))
+    # Status questions are answered by the rules instantly, without asking the AI.
+    assert env.jobs()[-1]["ref"] in say(env, "how's it going")
+    assert env.ai.decisions == []
     assert "Your apps" in say(env, "what have i made", ChatDecision(reply="", action="list_apps"))
 
 

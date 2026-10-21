@@ -465,3 +465,33 @@ def test_old_database_migrates_additively(tmp_path):
     assert store.create_project(1, "A site for my bakery", "website")["number"] == 2
     with pytest.raises(ValueError):
         store.create_project(1, "x" * 20, "ios")
+
+
+# ---------- responsiveness when the AI is slow ----------
+class SlowAI:
+    def __init__(self, delay):
+        self.delay = delay
+        self.calls = 0
+
+    def ask(self, system, user, schema, title="", timeout=None):
+        import time
+        self.calls += 1
+        time.sleep(self.delay)
+        return ChatDecision(reply="late"), {}
+
+
+def test_simple_messages_never_wait_for_the_ai(u):
+    u.ai = SlowAI(30)
+    u.sms.service.brain = ChatBrain(u.settings, u.ai, synchronous=True, website_problem=u.sms.service.website_problem)
+    for text in ("hi", "What are you building?", "show my projects", "thanks"):
+        u.text(OWNER, text)
+    assert u.ai.calls == 0 and len(u.all()) == 4
+
+
+def test_slow_ai_falls_back_to_rules(u):
+    u.settings.chat_timeout = 1
+    u.ai = SlowAI(5)
+    u.sms.service.brain = ChatBrain(u.settings, u.ai, synchronous=True, website_problem=u.sms.service.website_problem)
+    u.text(OWNER, "Create a premium website for my coffee brand")
+    assert u.ai.calls == 1
+    assert u.projects()[0]["kind"] == "website" and "designing your website" in u.last()

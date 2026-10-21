@@ -36,6 +36,7 @@ NEW_INTENT = re.compile(
     r"organi[sz]er|flashcards?|quiz|to-?do list)\b"
     r"|\b(?:new|another|second|separate|different)\s+app\b", re.I)
 REF_RE = re.compile(r"^G-[2-9A-HJ-NP-TV-Z]{5}$", re.I)
+INSTANT = {"greeting", "thanks", "help", "status", "projects", "download", "cancel"}
 NEVER_BUILDS = {"greeting", "thanks", "help", "status", "projects", "download", "cancel", "publish"}
 
 
@@ -188,6 +189,13 @@ class SmsService:
             if user.get("pending_text"):
                 self.store.update_user(user["id"], pending_text=None)
             return command
+        if self.brain is not None and classify(body, has_projects=True, has_active=True).kind in INSTANT:
+            # Greetings, status, lists, links and cancel are answered by the rules right away: they never wait
+            # for the AI (which can take minutes when Gemini is overloaded).
+            if user.get("pending_text"):
+                self.store.update_user(user["id"], pending_text=None)
+            event("sms.instant", phone=mask(user["phone"]))
+            return self._plain(user, body, sid)
         if self.brain is not None:
             if user.get("pending_text"):
                 self.store.update_user(user["id"], pending_text=None)
