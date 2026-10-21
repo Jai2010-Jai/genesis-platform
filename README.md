@@ -1,4 +1,18 @@
-# Genesis — describe an Android app, get a native APK
+# Genesis — describe an Android app or a website, get the real thing
+
+Genesis is a local AI software builder with one conversation (WhatsApp, SMS, web chat, voice notes) and two
+pipelines: **Android apps** (below) and **websites** (weave's generator, see [docs/WEBSITES.md](docs/WEBSITES.md)).
+It works out which one you mean, asks when that's unclear, and returns an APK download link or a private
+website preview. Architecture and audit: [INTEGRATION_PLAN.md](INTEGRATION_PLAN.md).
+
+```
+WhatsApp / SMS (Twilio) ─┐                          ┌─ Android: Gemini ─► validator ─► Gradle ─► APK verify ─► /download/<token>
+Web chat / voice note ───┼─► conversation + router ─┤
+                         │   (one SQLite store)     └─ Website: weave engine (Node bridge) ─► validator ─► /preview/<token>/
+                         └──────────── progress and results through the same outbox ─── publish: owner-approved, Netlify
+```
+
+### Android pipeline
 
 Genesis is a local AI app factory. You describe an app in plain language. Gemini writes Kotlin + Jetpack
 Compose into a locked, verified Android template, Gradle compiles it on your machine, compile errors are
@@ -71,7 +85,12 @@ written into generated apps or logs, and it is stripped from the environment tha
 - Transient `503 UNAVAILABLE` overload errors are retried with backoff, then the next available model is tried.
 - One app is typically 1 generation call plus 0–2 repair calls (~10–40k tokens in total).
 
-### Without an API key: the Antigravity bridge
+### Legacy: the Antigravity bridge
+
+> The Antigravity `agentapi` bridge only works when Genesis is started from a terminal inside the Antigravity app,
+> and this setup no longer has that access. Use `GENESIS_AI_BACKEND=api` with `GEMINI_API_KEY` (the website builder
+> requires it). Genesis never switches between providers by itself: a missing or failing key is reported, not
+> worked around.
 
 `GENESIS_AI_BACKEND=antigravity` sends each generation/change/repair request to the **Antigravity** desktop
 app's agent (through Antigravity's own `agentapi` command) instead of the Gemini API, so it runs on the model
@@ -170,6 +189,14 @@ fake Gemini and fake Gradle (success, repair success, bounded repair failure, to
 unsafe output rejected), secret scrubbing from the Gradle environment, and API validation, rate limits,
 host/origin checks and download gating.
 
+Website and unified-routing tests (`tests/test_website.py`, `tests/test_unified.py`) cover: the real `bridge.mjs`
+run under Node against a fake weave engine (detecting canned fallbacks, blocking `agy`, redacting keys), website
+validation, versioning and rollback, Android-vs-website routing and clarification, greetings and status questions
+never building, project selection across both kinds, ownership and token separation (an APK token can't open a
+preview and vice versa), duplicate webhooks, one job at a time, provider failures, sandboxed preview headers,
+publish approval (owner only, explicit `PUBLISH`, never anonymous), the chat brain's guard rails, and the additive
+database migration. Node.js is required for the bridge tests (they are skipped without it).
+
 SMS tests (`tests/test_sms.py`) fake Twilio and Gemini and cover signature validation, duplicate deliveries,
 linking/authorization, conversations and follow-up changes, queue retries and crash recovery, cancellation, send
 failures, delivery callbacks, download tokens and rate limits. `GENESIS_RUN_INTEGRATION=1` additionally runs the
@@ -195,6 +222,11 @@ genesis/
   core/builder.py    workspace creation, Gradle runner (timeout, scrubbed env), APK verification
   core/diagnostics.py Kotlin compiler error extraction
   core/jobs.py       job store (data/builds/<id>/), queue, generate→build→repair pipeline
+  sms/               shared conversation engine for WhatsApp/SMS/web chat: store, intents, chat brain, worker, routes
+  web/bridge.mjs     runs weave's website generator in a sandboxed Node process (no deploys, no fallbacks)
+  web/builder.py     website builds (data/sites/<id>/): generate/modify -> validate -> preview
+  web/validate.py    checks for generated HTML
+  web/deploy.py      owner-approved Netlify publishing (token only)
   static/            dashboard (vanilla HTML/CSS/JS, no external requests)
 android_template/    protected Android project (Gradle, manifest, theme, MainActivity)
 tests/               pytest suite

@@ -4,7 +4,7 @@
 #   scripts/genesis_public.sh            # quick tunnel: free, no account, new random URL each run
 #   PUBLIC_BASE_URL=https://genesis.example.com scripts/genesis_public.sh   # you already run a named tunnel/proxy
 #
-# Only /chat, /api/chat/*, /api/webhooks/twilio/* and /download/<token> work through the tunnel; the dashboard
+# Only /chat, /api/chat/*, /api/webhooks/twilio/*, /download/<token> and /preview/<token>/ work through the tunnel; the dashboard
 # stays private to this computer (requests carrying proxy headers never get the local bypass).
 set -euo pipefail
 cd "$(dirname "$0")/.."
